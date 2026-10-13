@@ -58,8 +58,18 @@ jobs:
       - name: 冒烟自测（无显示环境，不开窗口）
         shell: pwsh
         run: |
-          & ".\dist\QQMusicUnlocker\QQMusicUnlocker.exe" --selftest
-          if ($LASTEXITCODE -ne 0) { throw "selftest 失败，退出码 $LASTEXITCODE" }
+          # --windowed 的 GUI 子系统 exe 不向 PowerShell 可靠回传退出码，
+          # 但 stdout 可被重定向捕获；用 Start-Process -Wait 等它跑完，再查成功标记。
+          $exe = ".\dist\QQMusicUnlocker\QQMusicUnlocker.exe"
+          Start-Process -FilePath $exe -ArgumentList '--selftest' -Wait -NoNewWindow `
+            -RedirectStandardOutput selftest.out -RedirectStandardError selftest.err
+          Write-Host "---- selftest stdout ----"; if (Test-Path selftest.out) { Get-Content selftest.out }
+          Write-Host "---- selftest stderr ----"; if (Test-Path selftest.err) { Get-Content selftest.err }
+          $out = (Get-Content selftest.out -Raw -ErrorAction SilentlyContinue) + `
+                 (Get-Content selftest.err -Raw -ErrorAction SilentlyContinue)
+          if ($out -match 'SELFTEST FAILED') { throw "selftest 报告失败" }
+          if ($out -notmatch 'SELFTEST OK')  { throw "selftest 未输出成功标记（exe 可能启动即崩）" }
+          Write-Host "selftest 通过"
 
       - name: 附带许可与说明，打包 zip
         shell: pwsh
