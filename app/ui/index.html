@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QQ 音乐解锁器</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">
+    <div class="logo">♪</div>
+    <div>
+      <h1>QQ 音乐解锁器</h1>
+      <p class="sub">mgg / mflac 解密转 MP3 · 本地处理，全程不出机器</p>
+    </div>
+  </div>
+  <div class="status" id="statusBar">
+    <span class="pill" id="pillFfmpeg">检测中…</span>
+    <span class="pill" id="pillAccount">账号检测中…</span>
+    <button class="ghost" id="btnReloadCred" title="QQ 音乐重新登录后点这里">重载凭据</button>
+  </div>
+</header>
+
+<main>
+  <section class="card drop" id="dropZone">
+    <div class="dropInner">
+      <strong>把 .mgg / .mflac 文件拖到这里</strong>
+      <span>也可以拖整个文件夹，或点下面的按钮让系统选择</span>
+      <div class="row">
+        <button class="primary" id="btnPickFiles">选择文件</button>
+        <button class="ghost" id="btnPickFolder">选择文件夹</button>
+        <button class="ghost" id="btnAddPath">输入路径</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="cardHead">
+      <h2>队列 <span class="muted" id="queueCount">0</span></h2>
+      <div class="row">
+        <button class="ghost small" id="btnClearDone">清除已完成</button>
+        <button class="ghost small" id="btnClearAll">清空队列</button>
+      </div>
+    </div>
+    <div class="tableWrap">
+      <table id="queue">
+        <thead>
+          <tr><th>文件</th><th class="c-size">大小</th><th class="c-footer">尾部</th><th class="c-status">状态</th><th class="w30">输出</th></tr>
+        </thead>
+        <tbody id="queueBody"></tbody>
+      </table>
+      <div class="empty" id="queueEmpty">队列是空的，先拖几个文件进来</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="cardHead"><h2>设置</h2></div>
+    <div class="settings">
+      <label>输出目录
+        <div class="row">
+          <input id="outdir" type="text" spellcheck="false">
+          <button class="ghost small" id="btnPickOut">选择…</button>
+          <button class="ghost small" id="btnReveal">打开</button>
+        </div>
+      </label>
+      <label>MP3 码率
+        <select id="bitrate">
+          <option value="320k">320 kbps（推荐）</option>
+          <option value="256k">256 kbps</option>
+          <option value="192k">192 kbps</option>
+          <option value="128k">128 kbps</option>
+        </select>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="keepOgg"> 保留解密后的 .ogg 中间文件
+      </label>
+    </div>
+  </section>
+</main>
+
+<footer class="bar bottom">
+  <div class="progressWrap">
+    <div class="progress"><div class="progressFill" id="progFill"></div></div>
+    <span class="muted" id="progText">空闲</span>
+  </div>
+  <div class="row">
+    <button class="primary" id="btnStart">开始转换</button>
+    <button class="ghost" id="btnStop" disabled>停止</button>
+    <button class="ghost" id="btnLog">日志</button>
+    <button class="ghost" id="btnQuit" title="关闭本地服务进程">退出服务</button>
+  </div>
+</footer>
+
+<aside class="drawer" id="drawer">
+  <div class="cardHead">
+    <h2>运行日志</h2>
+    <button class="ghost small" id="btnCloseLog">收起</button>
+  </div>
+  <div class="logs" id="logs"></div>
+</aside>
+
+<script src="/app.js"></script>
+</body>
+</html>

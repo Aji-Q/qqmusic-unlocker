@@ -1,0 +1,7 @@
+dist/
+native/QQMusicUnlocker
+__pycache__/
+*.pyc
+.DS_Store
+build/
+*.spec
