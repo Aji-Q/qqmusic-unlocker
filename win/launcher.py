@@ -17,6 +17,13 @@ import os
 import sys
 import uuid
 
+# Windows 控制台默认 cp936/cp1252，打印中文会 UnicodeEncodeError；强制 UTF-8。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 # 让 "import server / qmengine" 能找到 app/（源码运行与 PyInstaller 打包都适用）
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _APP = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(_HERE)), "app")
