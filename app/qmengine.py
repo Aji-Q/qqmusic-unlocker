@@ -19,9 +19,7 @@ import base64
 import json
 import math
 import os
-import plistlib
 import shutil
-import sqlite3
 import struct
 import subprocess
 import sys
@@ -312,6 +310,7 @@ def read_credentials() -> Credentials:
         return Credentials(uin, authst, login_type, _plist_mtime())
     if not os.path.exists(PLIST):
         raise EngineError(f"未找到 QQ 音乐凭据文件：{PLIST}（请先在 QQ 音乐登录）")
+    import plistlib
     try:
         pl = plistlib.load(open(PLIST, "rb"))
         inner = plistlib.loads(pl["AutoLoginUserInfo"])
@@ -410,6 +409,7 @@ def _plist_mtime():
 def db_lookup(path: str):
     if not SQLITE or not os.path.exists(SQLITE):
         return None
+    import sqlite3
     try:
         con = sqlite3.connect(f"file:{SQLITE}?mode=ro", uri=True)
         row = con.execute(
