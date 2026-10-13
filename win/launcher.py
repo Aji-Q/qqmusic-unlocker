@@ -63,7 +63,6 @@ def selftest() -> int:
     finally:
         httpd.shutdown()
     print("SELFTEST OK")
-    return 0
 
 
 def run_window() -> int:
@@ -84,7 +83,16 @@ def run_window() -> int:
 
 def main() -> int:
     if "--selftest" in sys.argv:
-        return selftest()
+        # subtle: PyInstaller --windowed 的 exe 在解释器正常退出时会因 stderr
+        # flush 把退出码变成 1。selftest 用 os._exit 绕过退出清理，确定性返回码。
+        try:
+            selftest()
+        except BaseException as exc:  # noqa: BLE001
+            print("SELFTEST FAILED:", exc)
+            sys.stdout.flush()
+            os._exit(1)
+        sys.stdout.flush()
+        os._exit(0)
     return run_window()
 
 
