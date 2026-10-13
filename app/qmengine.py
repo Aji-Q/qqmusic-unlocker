@@ -306,7 +306,10 @@ class Credentials:
 
 def read_credentials() -> Credentials:
     if IS_WIN:
-        uin, authst, login_type = wincred.read_credentials()
+        try:
+            uin, authst, login_type = wincred.read_credentials()
+        except (FileNotFoundError, ValueError) as exc:
+            raise EngineError(str(exc)) from exc
         return Credentials(uin, authst, login_type, _plist_mtime())
     if not os.path.exists(PLIST):
         raise EngineError(f"未找到 QQ 音乐凭据文件：{PLIST}（请先在 QQ 音乐登录）")
