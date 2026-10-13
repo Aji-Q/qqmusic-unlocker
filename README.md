@@ -12,6 +12,8 @@ qqmusic-unlocker/
 │   ├── qmengine.py           # 解密引擎（无第三方依赖，可单独命令行使用）
 │   ├── server.py             # 本地服务：任务队列 / 进度 / 原生文件选择
 │   └── ui/                   # 前端界面（index.html + style.css + app.js）
+├── win/launcher.py           # Windows 原生窗口入口（pywebview + WebView2）
+├── app/wincred.py            # Windows 凭据读取（只读本人账号文件）
 └── tools/make_icon.py        # 生成 AppIcon.icns
 ```
 
@@ -23,6 +25,27 @@ qqmusic-unlocker/
    也可以直接把文件**拖到应用图标上**（走 Apple Event，自动进队列并打开界面）。
 2. 确认输出目录（默认桌面）与码率（默认 320 kbps）。
 3. 点「开始转换」，每行显示实时进度，完成后点「打开所在位置」。
+
+## Windows 版
+
+Windows 版同样是自带窗口的软件（基于系统 WebView2），不打开浏览器，界面和
+用法与 macOS 版一致。区别在于读登录凭据的来源：
+
+- 需先安装并登录 **QQ 音乐 PC 客户端**；
+- 凭据只从本机当前用户自己的文件读取：`%APPDATA%\\Tencent\\QQMusic\\`
+  下的 `QQMusicServiceConfig.ini`（取 `uin`）与 `SetCookie.dat`（取 `authst`）。
+  不读取任何其它进程的内存，不改动客户端。
+- Windows 11 自带 WebView2 运行时；个别 Windows 10 需到微软官网装 “Evergreen” 运行时。
+- ffmpeg 已随 exe 一起打包，无需自行安装。
+
+**获取 exe**：仓库 → Actions → `build-windows` 工作流，手动 `Run workflow`，
+构建完在该次运行的 Artifacts 里下载 `QQ音乐解锁器-windows-x64.zip`；
+或打一个 `v*` 标签（如 `v1.0.0`），工作流会自动把 zip 发到 Releases。
+解压后双击 `QQMusicUnlocker.exe`。
+
+本地想自己打包见 `.github/workflows/build-windows.yml` 里的步骤（PyInstaller onedir
++ Gyan.dev 的 ffmpeg 静态构建，GPLv3）。界面/引擎/服务与 macOS 共用 `app/`，
+Windows 专有的只有 `app/wincred.py`（读凭据）和 `win/launcher.py`（原生窗口入口）。
 
 **命令行**（批量 / 脚本化）：
 

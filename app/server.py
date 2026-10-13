@@ -222,6 +222,11 @@ class Jobs:
 
 # ------------------------------------------------------------- 原生文件选择
 
+IS_WIN = sys.platform.startswith("win")
+
+
+# -- macOS：osascript 原生对话框 ----------------------------------------
+
 def osascript(script: str, timeout: int = 120):
     """执行 AppleScript；用户取消（-128）返回空字符串而不是抛错。"""
     proc = subprocess.run(["osascript", "-e", script], capture_output=True,
@@ -233,8 +238,29 @@ def osascript(script: str, timeout: int = 120):
     return proc.stdout.strip()
 
 
+# -- Windows：tkinter 原生对话框（stdlib，随 Python 一起打包） ----------
+# subtle: tkinter 的对话框必须在它自己创建的线程里从头到尾用完一个 root，
+# 跨线程复用 root 会崩；这里每次开一个隐藏 root，用完即销毁。
+
+def _tk_dialog(fn):
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        return fn(filedialog, root)
+    finally:
+        root.destroy()
+
+
 def pick_files():
-    # 用扩展名过滤，省得在对话框里翻半天
+    if IS_WIN:
+        exts = " ".join(f"*{e}" for e in eng.SUPPORTED_EXT)
+        res = _tk_dialog(lambda fd, r: fd.askopenfilenames(
+            title="选择加密音频文件",
+            filetypes=[("QQ 音乐加密音频", exts), ("所有文件", "*.*")]))
+        return [p for p in res if p]
     type_list = ", ".join(f'"{e.lstrip(".")}"' for e in eng.SUPPORTED_EXT)
     out = osascript(
         f'set typeList to {{{type_list}}}\n'
@@ -248,11 +274,20 @@ def pick_files():
 
 
 def pick_folder(prompt="选择包含加密音频的目录"):
+    if IS_WIN:
+        return _tk_dialog(lambda fd, r: fd.askdirectory(title=prompt)) or ""
     out = osascript(f'POSIX path of (choose folder with prompt "{prompt}")')
     return out.strip()
 
 
 def reveal(path):
+    if IS_WIN:
+        # 选中文件时用 /select 定位，否则直接打开目录
+        if os.path.isfile(path):
+            subprocess.run(["explorer", "/select,", os.path.normpath(path)], check=False)
+        else:
+            os.startfile(path if os.path.isdir(path) else os.path.dirname(path))  # noqa: S606
+        return
     subprocess.run(["open", "-R", path], check=False)
 
 
@@ -379,6 +414,22 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"error": "未知接口"}, 404)
 
 
+def start_server(port=0, token="", runtime_file=""):
+    """创建并在后台线程启动 HTTP 服务，返回 (httpd, url)。供 Windows 的
+    pywebview 启动器在本进程内调用，不阻塞主线程。"""
+    jobs = Jobs(eng.EkeyCache())
+    Handler.jobs = jobs
+    Handler.token = token
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    bound = httpd.server_address[1]
+    url = f"http://127.0.0.1:{bound}/?t={token}" if token else f"http://127.0.0.1:{bound}/"
+    if runtime_file:
+        with open(runtime_file, "w") as f:
+            f.write(json.dumps({"port": bound, "token": token, "pid": os.getpid()}))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, url
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=0)
@@ -387,23 +438,16 @@ def main():
     ap.add_argument("--runtime-file", default="")
     args = ap.parse_args()
 
-    jobs = Jobs(eng.EkeyCache())
-    Handler.jobs = jobs
-    Handler.token = args.token
-    httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    port = httpd.server_address[1]
-    url = f"http://127.0.0.1:{port}/"
-    if args.runtime_file:
-        with open(args.runtime_file, "w") as f:
-            f.write(json.dumps({"port": port, "token": args.token, "pid": os.getpid()}))
+    httpd, url = start_server(args.port, args.token, args.runtime_file)
     sys.stdout.reconfigure(line_buffering=True)
     print(f"QQ 音乐解锁器运行中：{url}", flush=True)
     if not args.no_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:
-        httpd.serve_forever()
+        while True:
+            time.sleep(3600)
     except KeyboardInterrupt:
-        pass
+        httpd.shutdown()
 
 
 if __name__ == "__main__":

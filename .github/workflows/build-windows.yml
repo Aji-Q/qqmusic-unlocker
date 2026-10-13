@@ -1,0 +1,99 @@
+name: build-windows
+
+# 构建 Windows 版 exe。手动触发，或打 v* 标签时触发（标签会额外发 Release）。
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write          # 打标签时创建 Release 需要
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装打包依赖
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          # pywebview 在 Windows 上会一并拉入 pythonnet，走系统自带的 WebView2
+          pip install "pyinstaller==6.*" "pywebview==5.*"
+
+      - name: 下载并校验 ffmpeg（Gyan 静态构建，GPLv3）
+        shell: pwsh
+        run: |
+          $base = "https://www.gyan.dev/ffmpeg/builds"
+          Invoke-WebRequest "$base/ffmpeg-release-essentials.zip" -OutFile ff.zip
+          Invoke-WebRequest "$base/ffmpeg-release-essentials.zip.sha256" -OutFile ff.sha256
+          $want = (Get-Content ff.sha256).Trim().Split()[0].ToLower()
+          $got  = (Get-FileHash ff.zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "ffmpeg 压缩包 SHA256 不符：want=$want got=$got" }
+          Expand-Archive ff.zip -DestinationPath fftmp -Force
+          $bin = Get-ChildItem fftmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item $bin.FullName ffmpeg.exe
+          Copy-Item (Join-Path $bin.Directory "ffprobe.exe") ffprobe.exe
+          "ffmpeg 版本:"; ./ffmpeg.exe -hide_banner -version | Select-Object -First 1
+          # 确认带 libmp3lame（转 MP3 必需）
+          if (-not (./ffmpeg.exe -hide_banner -encoders 2>&1 | Select-String libmp3lame)) {
+            throw "ffmpeg 不含 libmp3lame 编码器"
+          }
+
+      - name: PyInstaller 打包（onedir，规避 Defender 误报）
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --onedir --windowed `
+            --name QQMusicUnlocker `
+            --add-data "app;app" `
+            --add-binary "ffmpeg.exe;." `
+            --add-binary "ffprobe.exe;." `
+            win/launcher.py
+
+      - name: 冒烟自测（无显示环境，不开窗口）
+        shell: pwsh
+        run: |
+          & ".\dist\QQMusicUnlocker\QQMusicUnlocker.exe" --selftest
+          if ($LASTEXITCODE -ne 0) { throw "selftest 失败，退出码 $LASTEXITCODE" }
+
+      - name: 附带许可与说明，打包 zip
+        shell: pwsh
+        run: |
+          $dst = "dist\QQMusicUnlocker"
+          New-Item -ItemType Directory -Force "$dst\LICENSES" | Out-Null
+          @"
+          本程序随附的 ffmpeg.exe / ffprobe.exe 为 Gyan.dev 发布的静态构建，许可 GPLv3。
+          源码与构建说明：https://www.gyan.dev/ffmpeg/builds/
+          FFmpeg 项目：https://ffmpeg.org/   源码：https://github.com/FFmpeg/FFmpeg
+          "@ | Set-Content -Encoding utf8 "$dst\LICENSES\FFMPEG.txt"
+          if (Test-Path README.md) { Copy-Item README.md "$dst\README.md" }
+          $zip = "QQ音乐解锁器-windows-x64.zip"
+          Compress-Archive -Path "$dst\*" -DestinationPath $zip -Force
+          $h = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$h  $zip" | Set-Content -Encoding ascii "$zip.sha256"
+          "SHA256: $h"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QQ音乐解锁器-windows-x64
+          path: |
+            QQ音乐解锁器-windows-x64.zip
+            QQ音乐解锁器-windows-x64.zip.sha256
+
+      - name: 打标签时发 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            QQ音乐解锁器-windows-x64.zip
+            QQ音乐解锁器-windows-x64.zip.sha256
+          body: |
+            Windows x64 版（自带 ffmpeg）。解压后运行 `QQMusicUnlocker.exe`。
+            需先安装并登录 QQ 音乐 PC 客户端。首次运行若系统缺少 WebView2 运行时，
+            Windows 11 已内置，Windows 10 可到微软官网装 “Evergreen” 运行时。
+            校验：`Get-FileHash QQ音乐解锁器-windows-x64.zip -Algorithm SHA256`

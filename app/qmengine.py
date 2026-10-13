@@ -24,20 +24,57 @@ import shutil
 import sqlite3
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import urllib.request
 
+IS_WIN = sys.platform.startswith("win")
+IS_MAC = sys.platform == "darwin"
+
 HOME = os.path.expanduser("~")
-PLIST = os.path.join(HOME, "Library/Preferences/com.tencent.QQMusicMac.plist")
-SUPPORT_DIR = os.path.join(
-    HOME, "Library/Containers/com.tencent.QQMusicMac/Data/Library/Application Support/QQMusicMac")
-SQLITE = os.path.join(SUPPORT_DIR, "qqmusic.sqlite")
-CACHE_DIR = os.path.join(SUPPORT_DIR, "iQmc")
+if IS_WIN:
+    import wincred  # 同目录；Windows 版凭据读取（只读本人账号文件）
+    _APPDATA = os.environ.get("APPDATA", os.path.join(HOME, "AppData", "Roaming"))
+    SUPPORT_DIR = os.path.join(_APPDATA, "Tencent", "QQMusic")
+    PLIST = wincred.ini_path()          # 仅用于 engine_status 显示路径
+    SQLITE = ""                         # Windows 客户端曲库结构不同，标签退回文件名解析
+    CACHE_DIR = SUPPORT_DIR
+    QQ_PLATFORM = "27"                  # GetEVkey 平台码：20=macOS，27=Windows PC
+    QQ_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+else:
+    PLIST = os.path.join(HOME, "Library/Preferences/com.tencent.QQMusicMac.plist")
+    SUPPORT_DIR = os.path.join(
+        HOME, "Library/Containers/com.tencent.QQMusicMac/Data/Library/Application Support/QQMusicMac")
+    SQLITE = os.path.join(SUPPORT_DIR, "qqmusic.sqlite")
+    CACHE_DIR = os.path.join(SUPPORT_DIR, "iQmc")
+    QQ_PLATFORM = "20"
+    QQ_UA = "QQMusic 19.99.0 (macOS)"
 API_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg"
 SUPPORTED_EXT = (".mgg", ".mgg1", ".mggl", ".mflac", ".mflac0", ".mflac1",
                  ".qmcogg", ".qmcflac", ".qmc0", ".qmc2", ".qmc3")
+
+
+def _ffbin(name: str) -> str:
+    """定位 ffmpeg / ffprobe：优先打包目录（PyInstaller 把 ffmpeg.exe 放在 exe 旁），
+    其次 PATH。返回可执行路径或名字（交给 subprocess 走 PATH）。"""
+    exe = name + ".exe" if IS_WIN else name
+    roots = []
+    if getattr(sys, "frozen", False):          # PyInstaller 运行态
+        roots.append(os.path.dirname(sys.executable))
+        roots.append(getattr(sys, "_MEIPASS", ""))
+    roots.append(os.path.dirname(os.path.abspath(__file__)))
+    for root in roots:
+        cand = os.path.join(root, exe)
+        if root and os.path.isfile(cand):
+            return cand
+    return shutil.which(name) or name
+
+
+FFMPEG = _ffbin("ffmpeg")
+FFPROBE = _ffbin("ffprobe")
 
 DELTA = 0x9E3779B9
 ROUNDS = 16
@@ -270,6 +307,9 @@ class Credentials:
 
 
 def read_credentials() -> Credentials:
+    if IS_WIN:
+        uin, authst, login_type = wincred.read_credentials()
+        return Credentials(uin, authst, login_type, _plist_mtime())
     if not os.path.exists(PLIST):
         raise EngineError(f"未找到 QQ 音乐凭据文件：{PLIST}（请先在 QQ 音乐登录）")
     try:
@@ -287,7 +327,7 @@ def read_credentials() -> Credentials:
         raise EngineError(f"读取凭据失败：{exc}") from exc
 
 
-def fetch_ekey(media_mid: str, filename: str, cred: Credentials, platform: str = "20"):
+def fetch_ekey(media_mid: str, filename: str, cred: Credentials, platform: str = QQ_PLATFORM):
     """调用 GetEVkey 取 ekey，返回 (ekey, 过期秒数)。"""
     body = {
         "comm": {"authst": cred.authst, "ct": "19", "cv": "1859",
@@ -304,7 +344,7 @@ def fetch_ekey(media_mid: str, filename: str, cred: Credentials, platform: str =
     req = urllib.request.Request(
         API_URL, data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json",
-                 "User-Agent": "QQMusic 19.99.0 (macOS)",
+                 "User-Agent": QQ_UA,
                  "Referer": "https://y.qq.com/"})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -368,7 +408,7 @@ def _plist_mtime():
 # ------------------------------------------------------------------- 曲库标签
 
 def db_lookup(path: str):
-    if not os.path.exists(SQLITE):
+    if not SQLITE or not os.path.exists(SQLITE):
         return None
     try:
         con = sqlite3.connect(f"file:{SQLITE}?mode=ro", uri=True)
@@ -411,7 +451,7 @@ def find_cover(song_id) -> str | None:
 
 def ffprobe(path: str) -> dict:
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+        [FFPROBE, "-v", "error", "-select_streams", "a:0",
          "-show_entries", "stream=codec_name,sample_rate,channels",
          "-show_entries", "format=duration,bit_rate", "-of", "json", path],
         capture_output=True, text=True)
@@ -427,7 +467,7 @@ def ffprobe(path: str) -> dict:
 
 
 def to_mp3(ogg: str, mp3: str, tags: dict, bitrate: str, cover: str | None = None):
-    args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", ogg]
+    args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", ogg]
     if cover:
         args += ["-i", cover, "-map", "0:a", "-map", "1:v", "-c:v", "mjpeg",
                  "-disposition:v", "attached_pic", "-metadata:s:v",
@@ -527,8 +567,8 @@ def scan_folder(folder: str):
 
 def engine_status() -> dict:
     """软件启动时自检：ffmpeg / 凭据 / 曲库是否就绪。"""
-    st = {"ffmpeg": bool(shutil.which("ffmpeg")),
-          "ffprobe": bool(shutil.which("ffprobe")),
+    st = {"ffmpeg": os.path.isfile(FFMPEG) or bool(shutil.which("ffmpeg")),
+          "ffprobe": os.path.isfile(FFPROBE) or bool(shutil.which("ffprobe")),
           "credentials": False, "account": None, "error": None,
           "cache_dir": CACHE_DIR, "cache_exists": os.path.isdir(CACHE_DIR),
           "db": os.path.exists(SQLITE)}
@@ -540,7 +580,7 @@ def engine_status() -> dict:
     except EngineError as exc:
         st["error"] = str(exc)
     if not st["ffmpeg"]:
-        st["error"] = "缺少 ffmpeg，请先执行：brew install ffmpeg"
+        st["error"] = ("缺少 ffmpeg" if IS_WIN else "缺少 ffmpeg，请先执行：brew install ffmpeg")
     return st
 
 
