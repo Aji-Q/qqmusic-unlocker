@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 import sys
@@ -18,6 +19,40 @@ sys.path.insert(0, _APP)
 
 import server  # noqa: E402
 import qmengine as eng  # noqa: E402
+from version import APP_VERSION  # noqa: E402
+
+WEBVIEW2_DOWNLOAD_URL = "https://developer.microsoft.com/microsoft-edge/webview2/#download-section"
+_WEBVIEW2_KEY = r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+
+
+class MissingWebView2Error(RuntimeError):
+    pass
+
+
+def webview2_runtime_version():
+    """微软公开的 Evergreen 检测方法；空串表示缺失，None 表示无法确认。
+
+    HKLM 使用 32 位注册表视图，对应 64 位系统的 WOW6432Node；HKCU
+    使用当前用户视图。权限等读取错误不应被误报为「尚未安装」。
+    https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution
+    """
+    import winreg
+
+    unknown = False
+    for root, view in ((winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY),
+                       (winreg.HKEY_CURRENT_USER, 0)):
+        try:
+            with winreg.OpenKey(root, _WEBVIEW2_KEY, 0, winreg.KEY_READ | view) as key:
+                value, _ = winreg.QueryValueEx(key, "pv")
+            parts = value.split(".") if isinstance(value, str) else []
+            if len(parts) == 4 and all(p.isascii() and p.isdigit() for p in parts):
+                if any(int(p) > 0 for p in parts):
+                    return value
+        except FileNotFoundError:
+            continue
+        except OSError:
+            unknown = True
+    return None if unknown else ""
 
 
 def file_args(argv: list[str]) -> list[str]:
@@ -38,7 +73,7 @@ def drop_handler(push, on_error=None):
             if paths:
                 push(paths)
             elif on_error:
-                on_error(RuntimeError("未能读取拖入路径，请使用「添加文件」"))
+                on_error(RuntimeError("未能读取拖入路径，请使用「选择文件」"))
         except Exception as exc:  # 回调异常交给窗口内日志显示
             if on_error:
                 on_error(exc)
@@ -71,14 +106,46 @@ def _write_report(path, report):
         print(json.dumps(report, ensure_ascii=False), flush=True)
 
 
+def show_add_response(window, result):
+    """结构化结果交由共用 UI 呈现，原生拖入也能看到未开始转换的原因。"""
+    payload = json.dumps(result, ensure_ascii=True)
+    window.evaluate_js(
+        "if (typeof window.handleAddResponse === 'function') {"
+        f"window.handleAddResponse({payload});"
+        "} void 0;")
+
+
+@contextmanager
+def isolated_settings():
+    """诊断不得读写用户的输出设置。"""
+    import tempfile
+
+    key = "QQMUSIC_UNLOCKER_CONFIG_DIR"
+    previous = os.environ.get(key)
+    with tempfile.TemporaryDirectory(prefix="qm-diagnostic-settings-") as folder:
+        os.environ[key] = folder
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
+
+
 def selftest(report_path="") -> int:
+    with isolated_settings():
+        return _offline_selftest(report_path)
+
+
+def _offline_selftest(report_path="") -> int:
     """离线检查打包资源、HTTP、路径、ffmpeg 与真实 MP3 转码，不读取登录凭据。"""
     import tempfile
     import urllib.error
     import urllib.request
     import wave
 
-    report = {"ok": False, "mode": "offline", "checks": []}
+    report = {"ok": False, "version": APP_VERSION, "mode": "offline", "checks": []}
     httpd = None
     try:
         if eng.IS_WIN:
@@ -147,20 +214,31 @@ def run_window(arg_paths: list[str], diagnostic_report=None) -> int:
     httpd, url = server.start_server(token=token)
     jobs = server.Handler.jobs
     diagnostic = diagnostic_report is not None
-    report = {"ok": False, "mode": "gui", "checks": []}
-    window = webview.create_window(
-        "QQ音乐解锁器", url=url, width=880, height=680,
-        min_size=(640, 480), text_select=True, hidden=diagnostic)
+    report = {"ok": False, "version": APP_VERSION, "mode": "gui", "checks": []}
+    try:
+        window = webview.create_window(
+            "QQ音乐解锁器", url=url, width=880, height=680,
+            min_size=(640, 480), text_select=True, hidden=diagnostic)
+    except Exception:
+        httpd.shutdown()
+        httpd.server_close()
+        raise
 
     def push(paths):
-        if jobs.add(paths):
-            jobs.start()
+        # 共用 UI 的设置保存屏障，避免原生拖入先于输出目录保存而开始转换。
+        payload = json.dumps(paths, ensure_ascii=True)
+        window.evaluate_js(
+            f"void window.addPaths({payload}).catch(window.showError);")
         if not diagnostic:
             window.show()
 
+    def drop_error(exc):
+        message = str(exc)
+        jobs.log(message, "error")
+        show_add_response(window, {"added": 0, "error": message, "reason": message})
+
     def loaded():
-        ok = install_drop(window, push,
-                          on_error=lambda exc: jobs.log(str(exc), "error"))
+        ok = install_drop(window, push, on_error=drop_error)
         if diagnostic:
             try:
                 assert ok, "DOM 拖拽桥注册失败"
@@ -203,12 +281,21 @@ def run_window(arg_paths: list[str], diagnostic_report=None) -> int:
 
 
 def _show_startup_error(exc):
-    message = ("窗口启动失败。\n请确认程序已完整解压，并已安装 Microsoft Edge WebView2 Runtime。\n"
-               "下载：https://developer.microsoft.com/microsoft-edge/webview2/\n\n"
-               + str(exc))
+    missing_runtime = isinstance(exc, MissingWebView2Error)
+    if missing_runtime:
+        message = ("未检测到 Microsoft Edge WebView2 Runtime，暂时无法显示界面。\n\n"
+                   "点击「是」打开微软官方下载页，安装 Evergreen Runtime 后重新打开本程序。")
+    else:
+        message = ("窗口启动失败。\n请先完整解压下载包，再打开 QQMusicUnlocker.exe。\n"
+                   "若仍失败，请在项目 Issues 中提供以下错误信息：\n\n"
+                   + f"版本 {APP_VERSION}\n{type(exc).__name__}: {exc}")
     if eng.IS_WIN:
         import ctypes
-        ctypes.windll.user32.MessageBoxW(None, message, "QQ音乐解锁器", 0x10)
+        result = ctypes.windll.user32.MessageBoxW(
+            None, message, "QQ音乐解锁器", 0x24 if missing_runtime else 0x10)
+        if missing_runtime and result == 6:  # IDYES：仅在用户点击后打开官网
+            import webbrowser
+            webbrowser.open(WEBVIEW2_DOWNLOAD_URL)
     elif sys.stderr is not None:
         print(message, file=sys.stderr)
 
@@ -223,8 +310,11 @@ def main(argv=None) -> int:
     if args.selftest:
         return selftest(args.selftest_report)
     try:
+        if eng.IS_WIN and webview2_runtime_version() == "":
+            raise MissingWebView2Error("未检测到 WebView2 Evergreen Runtime")
         if args.gui_selftest:
-            return run_window([], diagnostic_report=args.selftest_report)
+            with isolated_settings():
+                return run_window([], diagnostic_report=args.selftest_report)
         return run_window(file_args(args.paths))
     except Exception as exc:
         if args.gui_selftest:

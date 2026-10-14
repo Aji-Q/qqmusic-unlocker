@@ -1,103 +1,78 @@
 #!/bin/bash
-# 组装 macOS 应用包：./build.sh  ->  dist/QQ音乐解锁器.app
+# macOS self-contained app: PYTHON=/path/to/venv/bin/python ./build.sh
+# Build dependencies: Python + PyInstaller 6, Xcode command-line tools, FFmpeg.
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="QQ音乐解锁器"
 APP="$ROOT/dist/$APP_NAME.app"
-BUNDLE_ID="com.local.qqmusic-unlocker"
-VERSION="1.0.0"
-
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/app/ui"
-
-# 1) 编译原生入口（接 Apple Event / 拉起服务 / 自带窗口显示界面）
-if [ ! -x "$ROOT/native/QQMusicUnlocker" ] || [ "$ROOT/native/main.m" -nt "$ROOT/native/QQMusicUnlocker" ]; then
-  clang -fobjc-arc -O2 -o "$ROOT/native/QQMusicUnlocker" "$ROOT/native/main.m" \
-        -framework AppKit -framework Foundation -framework WebKit
+PYTHON="${PYTHON:-python3}"
+DEV=0
+INSTALL=0
+for option in "$@"; do
+  case "$option" in
+    --dev) DEV=1 ;;
+    --install) INSTALL=1 ;;
+    --login-item) echo '不再自动注册登录项。安装应用后可在 macOS 系统设置中添加登录项。' >&2; exit 2 ;;
+    *) echo "未知选项: $option（可用 --dev、--install）" >&2; exit 2 ;;
+  esac
+done
+VERSION="$(ROOT="$ROOT" "$PYTHON" -c 'import os, sys; sys.path.insert(0, os.path.join(os.environ["ROOT"], "app")); from version import APP_VERSION; print(APP_VERSION)')"
+# Include service/UI/native sources in runtime identity, even when rebuilding the same version.
+BUILD_ID="$(ROOT="$ROOT" "$PYTHON" - <<'PY'
+import hashlib, os
+from pathlib import Path
+root=Path(os.environ['ROOT'])
+h=hashlib.sha256()
+files=list((root/'app').rglob('*.py'))+list((root/'app/ui').glob('*'))+[root/'native/main.m', root/'mac/service.py']
+for p in sorted(files):
+    if p.is_file():
+        h.update(str(p.relative_to(root)).encode()); h.update(p.read_bytes())
+print(h.hexdigest()[:24])
+PY
+)"
+if [ "$DEV" = 0 ]; then
+  "$PYTHON" -m PyInstaller --version >/dev/null
+  command -v ffmpeg >/dev/null
+  command -v ffprobe >/dev/null
+  "$PYTHON" -m PyInstaller --noconfirm --clean --distpath "$ROOT/dist/service-build" \
+    --workpath "$ROOT/build/pyinstaller" "$ROOT/QQMusicService.spec"
 fi
-cp "$ROOT/native/QQMusicUnlocker" "$APP/Contents/MacOS/QQMusicUnlocker"
-chmod +x "$APP/Contents/MacOS/QQMusicUnlocker"
-
-# 1b) 命令行入口（批量转换用，不参与 GUI 生命周期）
-cp "$ROOT/launch.sh" "$APP/Contents/MacOS/launch"
-chmod 755 "$APP/Contents/MacOS/launch"
-
-# 2) 应用代码
-cp "$ROOT/app/qmengine.py" "$ROOT/app/server.py" "$APP/Contents/Resources/app/"
-cp "$ROOT/app/ui/index.html" "$ROOT/app/ui/style.css" "$ROOT/app/ui/app.js" \
-   "$APP/Contents/Resources/app/ui/"
-
-# 3) 图标
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+clang -fobjc-arc -O2 -mmacosx-version-min=15.0 -o "$APP/Contents/MacOS/QQMusicUnlocker" \
+  "$ROOT/native/main.m" -framework AppKit -framework Foundation -framework WebKit
+if [ "$DEV" = 1 ]; then
+  mkdir -p "$APP/Contents/Resources/app/ui"
+  cp "$ROOT/app/"*.py "$APP/Contents/Resources/app/"
+  cp "$ROOT/app/ui/"* "$APP/Contents/Resources/app/ui/"
+else
+  ditto "$ROOT/dist/service-build/QQMusicService" "$APP/Contents/Resources/service"
+fi
 cp "$ROOT/tools/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
-
-# 4) Info.plist
-cat > "$APP/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key><string>${APP_NAME}</string>
-    <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
-    <key>CFBundleExecutable</key><string>QQMusicUnlocker</string>
-    <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
-    <key>CFBundleIconFile</key><string>AppIcon</string>
-    <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-    <key>CFBundleVersion</key><string>${VERSION}</string>
-    <key>LSMinimumSystemVersion</key><string>12.0</string>
-    <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
-    <key>NSHighResolutionCapable</key><true/>
-    <!-- 声明文档类型，Finder 里把 .mgg 拖到应用图标上才会触发 open-documents
-         Apple Event；由于入口是原生程序（不是 shell 脚本），事件能被正确接收。 -->
-    <key>CFBundleDocumentTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleTypeName</key><string>QQ音乐加密音频</string>
-            <key>CFBundleTypeRole</key><string>Viewer</string>
-            <key>LSHandlerRank</key><string>Alternate</string>
-            <key>LSItemContentTypes</key>
-            <array><string>public.data</string></array>
-            <key>CFBundleTypeExtensions</key>
-            <array>
-                <string>mgg</string><string>mgg1</string><string>mggl</string>
-                <string>mflac</string><string>mflac0</string><string>mflac1</string>
-                <string>qmcogg</string><string>qmcflac</string>
-                <string>qmc0</string><string>qmc2</string><string>qmc3</string>
-            </array>
-        </dict>
-    </array>
-</dict>
-</plist>
-PLIST
-
-# 5) 临时签名（本机自用，避免 Gatekeeper 直接拦截）
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
-touch "$APP"
-
+APP="$APP" VERSION="$VERSION" BUILD_ID="$BUILD_ID" DEV="$DEV" "$PYTHON" - <<'PY'
+import os, plistlib
+from pathlib import Path
+info={
+ 'CFBundleName':'QQ音乐解锁器', 'CFBundleDisplayName':'QQ音乐解锁器',
+ 'CFBundleExecutable':'QQMusicUnlocker', 'CFBundleIdentifier':'com.local.qqmusic-unlocker',
+ 'CFBundleIconFile':'AppIcon', 'CFBundlePackageType':'APPL',
+ 'CFBundleShortVersionString':os.environ['VERSION'], 'CFBundleVersion':os.environ['VERSION'],
+ 'QQMusicBuildID':os.environ['BUILD_ID'], 'QQMusicStandalone':os.environ['DEV'] == '0', 'LSMinimumSystemVersion':'15.0',
+ 'LSApplicationCategoryType':'public.app-category.utilities', 'NSHighResolutionCapable':True,
+ 'CFBundleDocumentTypes':[{'CFBundleTypeName':'QQ音乐加密音频', 'CFBundleTypeRole':'Viewer',
+  'LSHandlerRank':'Alternate','LSItemContentTypes':['public.data'],
+  'CFBundleTypeExtensions':['mgg','mgg1','mggl','mflac','mflac0','mflac1','qmcogg','qmcflac','qmc0','qmc2','qmc3']}]
+}
+(Path(os.environ['APP'])/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
+PY
+if [ "$DEV" = 0 ]; then
+  "$PYTHON" "$ROOT/mac/bundle_metadata.py" "$APP" "$ROOT/build/pyinstaller/QQMusicService/Analysis-00.toc"
+fi
+# Ad-hoc signature detects corruption; it is not Developer ID signing or notarization.
+codesign --force --deep --sign - "$APP"
+codesign --verify --deep --strict "$APP"
 echo "已生成: $APP"
-du -sh "$APP" | awk '{print "体积:", $1}'
-
-# 6) 可选：注册/注销开机自启（登录项）
-if [ "${1:-}" = "--login-item" ]; then
-  PLIST="$HOME/Library/LaunchAgents/${BUNDLE_ID}.plist"
-  mkdir -p "$(dirname "$PLIST")"
-  cat > "$PLIST" <<AGENT
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>${BUNDLE_ID}</string>
-    <key>ProgramArguments</key>
-    <array><string>${APP}/Contents/MacOS/launcher</string></array>
-    <key>RunAtLoad</key><true/>
-    <key>ProcessType</key><string>Interactive</string>
-</dict>
-</plist>
-AGENT
-  launchctl unload "$PLIST" >/dev/null 2>&1 || true
-  launchctl load "$PLIST" >/dev/null 2>&1 || true
-  echo "已注册开机自启（登录后自动运行）: $PLIST"
-  echo "取消自启: launchctl unload \"$PLIST\" && rm \"$PLIST\""
-  echo "注意：注册的是当前 dist 路径，改动 App 位置后需重新执行本命令。"
+du -sh "$APP"
+if [ "$INSTALL" = 1 ]; then
+  "$PYTHON" "$ROOT/mac/install.py" "$APP"
 fi

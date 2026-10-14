@@ -14,16 +14,18 @@
     <span class="pill" id="pillFfmpeg" role="status">检测中</span>
     <button class="pill link" id="pillAccount" aria-haspopup="dialog">账号检测中</button>
     <button class="ghost small" id="btnReloadCred">重新检测</button>
+    <button class="ghost small" id="btnHelp" aria-haspopup="dialog">使用帮助</button>
   </div>
 </header>
 <main>
-  <div class="notice" id="notice" role="alert" hidden><span id="noticeText"></span><button class="ghost small" id="btnDismissNotice" aria-label="关闭提示">关闭</button></div>
+  <div class="notice" id="notice" role="status" hidden><span id="noticeText"></span><div class="row"><button class="small" id="btnNoticeAction" hidden></button><button class="ghost small" id="btnDismissNotice" aria-label="关闭提示">关闭</button></div></div>
   <section class="drop" id="dropZone" aria-labelledby="dropTitle">
     <div class="dropInner">
       <span class="format" aria-hidden="true">AUDIO → MP3</span>
       <h2 id="dropTitle">拖入音频，开始转换</h2>
       <p id="dropHint">MGG / MFLAC / QMC</p>
       <div class="row" id="pickRow"><button class="primary" id="btnPickFiles">选择文件</button><button id="btnPickFolder">选择文件夹</button><button class="ghost" id="btnAddPath" aria-haspopup="dialog">输入路径</button></div>
+      <button class="ghost small firstHelp" id="btnFindMusic" aria-haspopup="dialog">不知道歌曲文件在哪里？</button>
     </div>
   </section>
   <section class="result" id="resultBar" role="status" hidden>
@@ -35,11 +37,11 @@
     <div class="tableWrap"><table id="queue"><thead><tr><th scope="col">文件</th><th scope="col" class="c-size">大小</th><th scope="col" class="c-status">状态</th><th scope="col" class="w30">进度 / 输出</th></tr></thead><tbody id="queueBody"></tbody></table></div>
   </section>
   <section class="card settingsCard" id="settingsCard" aria-labelledby="settingsTitle">
-    <div class="cardHead"><h2 id="settingsTitle">输出设置</h2><button class="ghost small" id="btnToggleSettings" aria-expanded="true" aria-controls="settingsBody">收起</button></div>
+    <div class="cardHead"><h2 id="settingsTitle">输出设置 <span class="muted" id="settingsSaved" role="status"></span></h2><button class="ghost small" id="btnToggleSettings" aria-expanded="true" aria-controls="settingsBody">收起</button></div>
     <div class="settings" id="settingsBody">
-      <div class="field outputField"><label for="outdir">保存到</label><div class="pathRow"><input id="outdir" type="text" spellcheck="false" autocomplete="off"><button id="btnPickOut">更改</button><button class="ghost" id="btnReveal">打开</button></div></div>
+      <div class="field outputField"><label for="outdir">保存到</label><div class="pathRow"><input id="outdir" type="text" readonly title="点击「更改」选择保存文件夹" spellcheck="false" autocomplete="off"><button id="btnPickOut">更改</button><button class="ghost" id="btnReveal">打开</button></div></div>
       <div class="field"><label for="bitrate">MP3 码率</label><select id="bitrate"><option value="320k">320 kbps</option><option value="256k">256 kbps</option><option value="192k">192 kbps</option><option value="128k">128 kbps</option></select></div>
-      <label class="check"><input type="checkbox" id="keepOgg">保留原格式</label>
+      <label class="check"><input type="checkbox" id="keepOgg">同时保存解密后的 OGG / FLAC</label>
     </div>
   </section>
 </main>
@@ -48,8 +50,8 @@
   <div class="row"><button class="primary" id="btnStart" disabled>开始转换</button><button id="btnStop" hidden>停止</button><button class="ghost" id="btnLog" aria-haspopup="dialog">日志</button><button class="ghost" id="btnQuit">退出</button></div>
 </footer>
 <div class="modal" id="logModal" hidden><aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="logTitle" tabindex="-1"><div class="cardHead"><h2 id="logTitle">运行日志</h2><button class="ghost small" id="btnCloseLog">关闭</button></div><div class="logs" id="logs" tabindex="0"></div></aside></div>
-<div class="modal" id="helpModal" hidden><div class="modalBox" role="dialog" aria-modal="true" aria-labelledby="helpTitle" tabindex="-1"><div class="cardHead"><h2 id="helpTitle">账号状态</h2><button class="ghost small" id="btnCloseHelp">关闭</button></div><div class="helpBody" id="helpBody"></div><div class="row modalActions"><button class="primary" id="btnHelpRetry">重新检测</button><button id="btnHelpCopy">复制排查信息</button></div></div></div>
-<div class="modal" id="pathModal" hidden><form class="modalBox" id="pathForm" role="dialog" aria-modal="true" aria-labelledby="pathTitle" tabindex="-1"><div class="cardHead"><h2 id="pathTitle">输入路径</h2><button type="button" class="ghost small" id="btnClosePath">取消</button></div><label class="muted" for="paths">文件或文件夹，每行一个</label><textarea id="paths" rows="5" spellcheck="false" required></textarea><div class="row modalActions"><button class="primary" type="submit">添加并转换</button></div></form></div>
+<div class="modal" id="helpModal" hidden><div class="modalBox" role="dialog" aria-modal="true" aria-labelledby="helpTitle" tabindex="-1"><div class="cardHead"><h2 id="helpTitle">使用帮助</h2><button class="ghost small" id="btnCloseHelp">关闭</button></div><div class="helpBody" id="helpBody"></div><div class="row modalActions"><button class="primary" id="btnOpenQQMusic">打开 QQ 音乐</button><button id="btnHelpRetry">重新检测</button><button class="ghost" id="btnHelpCopy">复制排查信息</button></div><div class="muted version" id="appVersion"></div></div></div>
+<div class="modal" id="pathModal" hidden><form class="modalBox" id="pathForm" role="dialog" aria-modal="true" aria-labelledby="pathTitle" tabindex="-1"><div class="cardHead"><h2 id="pathTitle">输入路径</h2><button type="button" class="ghost small" id="btnClosePath">取消</button></div><label class="muted" for="paths">文件或文件夹，每行一个</label><textarea id="paths" rows="5" spellcheck="false" required aria-describedby="pathError"></textarea><p class="errText" id="pathError" role="status" hidden></p><div class="row modalActions"><button class="primary" type="submit">添加并转换</button></div></form></div>
 <script src="/app.js"></script>
 </body>
 </html>

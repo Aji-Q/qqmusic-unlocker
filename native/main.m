@@ -13,13 +13,35 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
+#import <CommonCrypto/CommonDigest.h>
 
 static NSString *const kLogDir = @"Library/Logs/QQMusicUnlocker";
 
 static NSString *HomeDir(void) { return NSHomeDirectory(); }
 static NSString *LogFile(void) { return [HomeDir() stringByAppendingPathComponent:[kLogDir stringByAppendingPathComponent:@"launcher.log"]]; }
-static NSString *RuntimeFile(void) { return [HomeDir() stringByAppendingPathComponent:[kLogDir stringByAppendingPathComponent:@"runtime.json"]]; }
 static NSString *AppCodeDir(void) { return [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"app"]; }
+static NSString *ServicePath(void)
+{
+    NSString *binary = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"service/QQMusicService"];
+    if ([[[NSBundle mainBundle] objectForInfoDictionaryKey:@"QQMusicStandalone"] boolValue] ||
+        [[NSFileManager defaultManager] isExecutableFileAtPath:binary]) return binary.stringByResolvingSymlinksInPath;
+    return [[AppCodeDir() stringByAppendingPathComponent:@"server.py"] stringByResolvingSymlinksInPath];
+}
+static NSString *AppVersion(void) { return [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"dev"; }
+static NSString *RuntimeFile(void)
+{
+    // Isolate copies and builds: a new bundle never attaches to an old UI service.
+    NSString *identity = [NSString stringWithFormat:@"%@|%@|%@", ServicePath(), AppVersion(),
+                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"QQMusicBuildID"] ?: @"dev"];
+    NSData *data = [identity dataUsingEncoding:NSUTF8StringEncoding];
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *key = [NSMutableString string];
+    for (int i = 0; i < 12; i++) [key appendFormat:@"%02x", digest[i]];
+    NSString *name = [NSString stringWithFormat:@"runtime-%@.json", key];
+    return [HomeDir() stringByAppendingPathComponent:[kLogDir stringByAppendingPathComponent:name]];
+}
+
 
 static void AppendLog(NSString *message)
 {
@@ -80,6 +102,8 @@ static NSDictionary *RuntimeInfo(void)
     if (![obj isKindOfClass:[NSDictionary class]]) return nil;
     NSNumber *pid = obj[@"pid"];
     if (!pid || !ProcessAlive(pid.integerValue)) return nil;
+    if (![obj[@"version"] isEqualToString:AppVersion()] ||
+        ![obj[@"service_path"] isEqualToString:ServicePath()]) return nil;
     return obj;
 }
 
@@ -92,31 +116,6 @@ static NSDictionary *LaunchEnvironment(void)
     return env;
 }
 
-/// 与 Info.plist 的 CFBundleTypeExtensions 保持一致
-static NSSet<NSString *> *SupportedExtensions(void)
-{
-    return [NSSet setWithArray:@[@"mgg", @"mgg1", @"mggl", @"mflac", @"mflac0", @"mflac1",
-                                 @"qmcogg", @"qmcflac", @"qmc0", @"qmc2", @"qmc3"]];
-}
-
-/// 文件原样保留；目录展开为其中受支持的加密音频（递归）
-static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
-{
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSMutableArray<NSString *> *out = [NSMutableArray array];
-    for (NSString *p in paths) {
-        BOOL isDir = NO;
-        if (![fm fileExistsAtPath:p isDirectory:&isDir]) continue;
-        if (!isDir) { [out addObject:p]; continue; }
-        for (NSString *rel in [fm enumeratorAtPath:p]) {
-            if ([SupportedExtensions() containsObject:rel.pathExtension.lowercaseString]) {
-                [out addObject:[p stringByAppendingPathComponent:rel]];
-            }
-        }
-    }
-    return out;
-}
-
 @class UnlockerDelegate;
 
 /// 接管文件拖放：拖动过程交给页面（高亮投放区），松手时由原生层送路径
@@ -124,12 +123,13 @@ static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
 @property (nonatomic, weak) UnlockerDelegate *owner;
 @end
 
-@interface UnlockerDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate>
+@interface UnlockerDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate>
 @property (nonatomic, strong) NSTask *server;
 @property (nonatomic, strong) NSMutableArray<NSString *> *pendingFiles;
 @property (nonatomic, strong) NSWindow *window;
 @property (nonatomic, strong) DropWebView *webView;
 @property (nonatomic, strong) NSTimer *watchdog;
+@property (nonatomic) BOOL pageReady;
 - (BOOL)pushPaths:(NSArray<NSString *> *)paths;
 @end
 
@@ -142,17 +142,13 @@ static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
     if (urls.count == 0) return [super performDragOperation:sender];
     NSMutableArray<NSString *> *paths = [NSMutableArray array];
     for (NSURL *u in urls) [paths addObject:u.path];
-    NSArray<NSString *> *files = ExpandPaths(paths);
-    AppendLog([NSString stringWithFormat:@"窗口拖入 %lu 项，展开为 %lu 个文件",
-               (unsigned long)paths.count, (unsigned long)files.count]);
-    if (files.count) [self.owner pushPaths:files];
+    AppendLog([NSString stringWithFormat:@"窗口拖入 %lu 项", (unsigned long)paths.count]);
+    // Preserve directories and invalid items so the API can report every outcome.
+    [self.owner pushPaths:paths];
     // lastVersion / poll 是 app.js 顶层声明，强制页面立即刷新队列
     [self evaluateJavaScript:@"document.getElementById('dropZone').classList.remove('hot');"
                               "if (typeof poll === 'function') { lastVersion = -1; poll(); }"
            completionHandler:nil];
-    if (files.count == 0) {
-        ShowAlert(@"没有可转换的文件", @"拖入的内容里没有受支持的加密音频（.mgg / .mflac 等）。");
-    }
     return YES;
 }
 
@@ -172,15 +168,11 @@ static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
 {
     if (RuntimeInfo()) return YES;
 
-    NSString *python = FindPython();
-    if (!python) {
-        ShowAlert(@"缺少 Python 3", @"请先安装命令行工具：xcode-select --install");
-        return NO;
-    }
-    if (![[NSFileManager defaultManager] isExecutableFileAtPath:@"/opt/homebrew/bin/ffmpeg"] &&
-        ![[NSFileManager defaultManager] isExecutableFileAtPath:@"/usr/local/bin/ffmpeg"] &&
-        ![[NSFileManager defaultManager] isExecutableFileAtPath:@"/usr/bin/ffmpeg"]) {
-        ShowAlert(@"缺少 ffmpeg", @"请先在终端执行：brew install ffmpeg");
+    NSString *service = ServicePath();
+    BOOL bundled = [service.lastPathComponent isEqualToString:@"QQMusicService"];
+    NSString *executable = bundled ? service : FindPython();
+    if (!executable || ![[NSFileManager defaultManager] isExecutableFileAtPath:executable]) {
+        ShowAlert(@"应用不完整", @"请重新下载 macOS 应用并完整解压。源码开发版需要 Python 3 和 FFmpeg。");
         return NO;
     }
 
@@ -192,11 +184,13 @@ static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
     }
 
     NSString *token = [[NSUUID UUID].UUIDString stringByReplacingOccurrencesOfString:@"-" withString:@""].lowercaseString;
-    NSString *server = [AppCodeDir() stringByAppendingPathComponent:@"server.py"];
 
     NSTask *task = [[NSTask alloc] init];
-    task.executableURL = [NSURL fileURLWithPath:python];
-    task.arguments = @[server, @"--token", token, @"--runtime-file", RuntimeFile(), @"--no-browser"];
+    task.executableURL = [NSURL fileURLWithPath:executable];
+    NSMutableArray *arguments = [NSMutableArray array];
+    if (!bundled) [arguments addObject:service];
+    [arguments addObjectsFromArray:@[@"--token", token, @"--runtime-file", RuntimeFile(), @"--no-browser"]];
+    task.arguments = arguments;
     task.environment = LaunchEnvironment();
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:LogFile()];
     [fh seekToEndOfFile];
@@ -211,6 +205,7 @@ static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
 
     for (int i = 0; i < 80; i++) {
         if (RuntimeInfo()) return YES;
+        if (!task.isRunning) break;
         [NSThread sleepForTimeInterval:0.25];
     }
     ShowAlert(@"启动失败", @"服务没有起来，详见 ~/Library/Logs/QQMusicUnlocker/launcher.log");
@@ -252,6 +247,7 @@ static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
         self.webView = [[DropWebView alloc] initWithFrame:frame configuration:cfg];
         self.webView.owner = self;
         self.webView.UIDelegate = self;
+        self.webView.navigationDelegate = self;
         self.webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         self.window.contentView = self.webView;
         [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
@@ -315,30 +311,34 @@ static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
     [alert.window makeFirstResponder:text];
 }
 
-/// 把文件追加进行中的队列（/api/open 只收普通文件，目录须先 ExpandPaths）
+- (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation
+{
+    self.pageReady = NO;
+}
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
+{
+    self.pageReady = YES;
+    NSArray<NSString *> *paths = [self.pendingFiles copy];
+    [self.pendingFiles removeAllObjects];
+    if (paths.count) [self pushPaths:paths];
+}
+
+/// Use the page's import path so native drops also wait for pending settings saves.
 - (BOOL)pushPaths:(NSArray<NSString *> *)paths
 {
-    NSDictionary *info = RuntimeInfo();
-    if (!info || paths.count == 0) return NO;
-    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%@/api/open", info[@"port"]]];
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-    req.HTTPMethod = @"POST";
-    req.timeoutInterval = 15;
-    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    [req setValue:info[@"token"] forHTTPHeaderField:@"X-Token"];
-    req.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{@"paths" : paths} options:0 error:NULL];
-
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    __block BOOL ok = NO;
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req
-                                    completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        if ([resp isKindOfClass:[NSHTTPURLResponse class]]) {
-            ok = ((NSHTTPURLResponse *)resp).statusCode == 200;
-        }
-        dispatch_semaphore_signal(sem);
-    }] resume];
-    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC));
-    return ok;
+    if (paths.count == 0) return NO;
+    if (!self.pageReady) {
+        [self.pendingFiles addObjectsFromArray:paths];
+        return YES;
+    }
+    NSData *data = [NSJSONSerialization dataWithJSONObject:paths options:0 error:NULL];
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSString *script = [NSString stringWithFormat:@"void window.addPaths(%@).catch(showError);", json];
+    [self.webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        if (error) ShowAlert(@"无法添加文件", @"界面尚未就绪，请重新添加文件。");
+    }];
+    return YES;
 }
 
 - (void)quitServer
@@ -362,21 +362,19 @@ static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
-    // 处理 `open -a App file` 早于 didFinishLaunching 到达的情况
-    [self handleFiles:self.pendingFiles.count ? self.pendingFiles : @[]];
-    [self.pendingFiles removeAllObjects];
+    // Files arriving before page load remain queued until didFinishNavigation.
+    [self handleFiles:@[]];
 }
 
 - (void)handleFiles:(NSArray<NSString *> *)paths
 {
-    NSArray<NSString *> *valid = ExpandPaths(paths);
     if (![self startServer]) {
         [NSApp terminate:nil];
         return;
     }
-    if (valid.count) {
-        AppendLog([NSString stringWithFormat:@"转发 %lu 个文件到队列", (unsigned long)valid.count]);
-        [self pushPaths:valid];
+    if (paths.count) {
+        AppendLog([NSString stringWithFormat:@"转发 %lu 项到队列", (unsigned long)paths.count]);
+        [self pushPaths:paths];
     }
     [self openUI];
 }
@@ -389,6 +387,42 @@ static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
         if (u.isFileURL) [paths addObject:u.path];
     }
     if (paths.count) [self handleFiles:paths];
+}
+
+- (BOOL)conversionRunning
+{
+    NSDictionary *info = RuntimeInfo();
+    if (!info) return NO;
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%@/api/state", info[@"port"]]];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.timeoutInterval = 2;
+    [request setValue:info[@"token"] forHTTPHeaderField:@"X-Token"];
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    __block BOOL running = NO;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSDictionary *state = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
+        running = [state[@"running"] boolValue];
+        dispatch_semaphore_signal(done);
+    }] resume];
+    dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC));
+    return running;
+}
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
+{
+    if (![self conversionRunning]) return NSTerminateNow;
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"正在转换";
+    alert.informativeText = @"退出会中断当前转换。";
+    [alert addButtonWithTitle:@"继续转换"];
+    [alert addButtonWithTitle:@"退出"];
+    return [alert runModal] == NSAlertSecondButtonReturn ? NSTerminateNow : NSTerminateCancel;
+}
+
+- (BOOL)windowShouldClose:(NSWindow *)sender
+{
+    [NSApp terminate:nil];
+    return NO;
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender { return YES; }

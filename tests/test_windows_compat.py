@@ -34,10 +34,10 @@ class QueueTests(unittest.TestCase):
         self.assertTrue(jobs.clear(only_finished=False))
         self.assertEqual(jobs.snapshot()["stats"]["total"], 0)
 
-    def test_clear_finished_keeps_waiting(self):
+    def test_clear_finished_keeps_waiting_and_failed_for_retry(self):
         jobs = self.make_jobs()
         self.assertTrue(jobs.clear(only_finished=True))
-        self.assertEqual([i.status for i in jobs.items], ["等待"])
+        self.assertEqual([i.status for i in jobs.items], ["等待", "失败"])
 
     def test_clear_rejects_active_queue_before_worker_picks_file(self):
         jobs = self.make_jobs()

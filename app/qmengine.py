@@ -96,6 +96,14 @@ ROUNDS = 16
 class EngineError(Exception):
     """带用户可读原因的失败。"""
 
+    def __init__(self, message, *, code="conversion_failed", action="retry", hint="", status=400):
+        super().__init__(message)
+        self.code, self.action, self.hint, self.status = code, action, hint, status
+
+    def as_dict(self):
+        return {"error": str(self), "message": str(self), "code": self.code,
+                "action": self.action, "hint": self.hint}
+
 
 # --------------------------------------------------------------------- TC-TEA
 
@@ -164,15 +172,22 @@ def parse_ekey(ekey: str) -> bytes:
     try:
         decoded = _b64(ekey.strip().strip("\x00").encode())
     except Exception as exc:  # noqa: BLE001
-        raise EngineError(f"ekey 不是合法 base64：{exc}") from exc
+        raise EngineError("无法识别此文件的解密信息", code="invalid_key", action="help",
+                          hint="请重新下载该文件；当前加密格式也可能尚不支持") from exc
     if decoded.startswith(_ENC_V2_PREFIX):
         s1 = tc_tea_decrypt(decoded[len(_ENC_V2_PREFIX):], _ENC_V2_KEYS[0])
         s2 = tc_tea_decrypt(s1, _ENC_V2_KEYS[1]) if s1 else None
         if not s2:
-            raise EngineError("EncV2 ekey 双层 TC-TEA 解密失败")
-        decoded = _b64(s2)
+            raise EngineError("暂不支持此文件的加密方式", code="invalid_key", action="help",
+                              hint="请在 QQ 音乐重新下载该文件，或查看兼容性说明")
+        try:
+            decoded = _b64(s2)
+        except (ValueError, TypeError) as exc:
+            raise EngineError("无法识别此文件的解密信息", code="invalid_key", action="help",
+                              hint="请重新下载该文件") from exc
     if len(decoded) < 8:
-        raise EngineError(f"ekey 解码后过短（{len(decoded)} 字节）")
+        raise EngineError("文件中的解密信息不完整", code="invalid_key", action="help",
+                          hint="请重新下载该文件")
     header, body = decoded[:8], decoded[8:]
     if not body:
         return header
@@ -324,13 +339,16 @@ def read_credentials() -> Credentials:
         try:
             uin, authst, login_type = wincred.read_credentials()
         except (OSError, ValueError) as exc:
-            raise EngineError(str(exc)) from exc
+            raise EngineError(str(exc), code="credentials_missing", action="login",
+                              hint="打开 QQ 音乐并登录，然后重新检测登录") from exc
         return Credentials(uin, authst, login_type, _plist_mtime())
     if not os.path.exists(PLIST):
-        raise EngineError(f"未找到 QQ 音乐凭据文件：{PLIST}（请先在 QQ 音乐登录）")
+        raise EngineError("未检测到 QQ 音乐登录", code="credentials_missing", action="login",
+                          hint="打开 QQ 音乐并登录，然后重新检测登录")
     import plistlib
     try:
-        pl = plistlib.load(open(PLIST, "rb"))
+        with open(PLIST, "rb") as handle:
+            pl = plistlib.load(handle)
         inner = plistlib.loads(pl["AutoLoginUserInfo"])
         objs = inner["$objects"]
         root = objs[inner["$top"]["root"].data]
@@ -339,9 +357,11 @@ def read_credentials() -> Credentials:
         return Credentials(str(user["nUserId"]), objs[user["strAuthst"].data],
                            str(user["loginType"]), os.path.getmtime(PLIST))
     except KeyError as exc:
-        raise EngineError("凭据文件里没有登录信息，请先登录 QQ 音乐客户端") from exc
+        raise EngineError("未检测到 QQ 音乐登录", code="credentials_missing", action="login",
+                          hint="打开 QQ 音乐并登录，然后重新检测登录") from exc
     except Exception as exc:  # noqa: BLE001
-        raise EngineError(f"读取凭据失败：{exc}") from exc
+        raise EngineError("无法读取 QQ 音乐登录状态", code="credentials_unreadable", action="login",
+                          hint="重新登录 QQ 音乐后再检测；若仍失败，请查看帮助") from exc
 
 
 def fetch_ekey(media_mid: str, filename: str, cred: Credentials, platform: str = QQ_PLATFORM):
@@ -366,17 +386,31 @@ def fetch_ekey(media_mid: str, filename: str, cred: Credentials, platform: str =
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             payload = json.loads(resp.read().decode())
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise EngineError("QQ 音乐返回的数据无法识别", code="service_response", action="retry",
+                          hint="稍后重试；若持续失败，请查看帮助中的兼容性说明") from exc
     except Exception as exc:  # noqa: BLE001
-        raise EngineError(f"调用 ekey 接口失败：{exc}") from exc
-    node = payload.get("req_1", {})
-    info = (node.get("data") or {}).get("midurlinfo") or [{}]
-    info = info[0]
+        raise EngineError("无法连接 QQ 音乐", code="network", action="retry",
+                          hint="检查网络连接后重试") from exc
+    if not isinstance(payload, dict):
+        raise EngineError("QQ 音乐返回的数据无法识别", code="service_response", action="retry",
+                          hint="稍后重试")
+    node = payload.get("req_1")
+    node = node if isinstance(node, dict) else {}
+    data = node.get("data")
+    data = data if isinstance(data, dict) else {}
+    infos = data.get("midurlinfo")
+    info = infos[0] if isinstance(infos, list) and infos and isinstance(infos[0], dict) else {}
     if not info.get("ekey"):
-        code = info.get("result")
-        hint = {104005: "该资源需要 VIP 或 ekey 请求方式不被接受",
-                0: "接口返回空 ekey（凭据可能已过期）"}.get(code, "")
-        raise EngineError(f"接口未返回 ekey（result={code}）{hint}")
-    expire = int((node.get("data") or {}).get("expiration") or 79200)
+        raise EngineError("未取得这首歌的解密信息", code="key_unavailable", action="login",
+                          hint="在 QQ 音乐确认该文件能播放，重新登录后重试；也可能是格式或接口已变化")
+    if not isinstance(info["ekey"], str):
+        raise EngineError("QQ 音乐返回的解密信息无法识别", code="invalid_key", action="help",
+                          hint="稍后重试；若持续失败，请查看兼容性说明")
+    try:
+        expire = int(data.get("expiration") or 79200)
+    except (ValueError, TypeError):
+        expire = 79200
     return info["ekey"], expire
 
 
@@ -467,15 +501,61 @@ def find_cover(song_id) -> str | None:
 
 # ------------------------------------------------------------------- 转码
 
-def _run_media(args):
+def _run_media(args, timeout=None):
     """GUI 子系统启动控制台工具时隐藏窗口，并独立于标准流处理 UTF-8 输出。"""
     try:
         return subprocess.run(
             args, stdin=subprocess.DEVNULL, capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
+            text=True, encoding="utf-8", errors="replace", timeout=timeout,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WIN else 0)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise EngineError(f"无法运行 {os.path.basename(args[0])}",
+                          code="dependencies", action="dependencies",
+                          hint="请重新下载并完整解压应用；源码运行请安装 FFmpeg") from exc
+
+
+def check_dependencies():
+    """开始前实际执行两个工具，能发现文件存在但架构或权限不正确。"""
+    for name, binary in (("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)):
+        result = _run_media([binary, "-version"], timeout=10)
+        if result.returncode != 0:
+            raise EngineError(f"{name} 无法启动", code="dependencies", action="dependencies",
+                              hint="请重新下载并完整解压应用；源码运行请安装 FFmpeg")
+
+
+def check_output_dir(outdir: str):
+    """实际创建临时文件验证权限，避免把只读目录中的整批任务标成失败。"""
+    try:
+        os.makedirs(outdir, exist_ok=True)
+        with tempfile.TemporaryFile(prefix=".qm-write-check-", dir=outdir) as handle:
+            handle.write(b"ok")
+            handle.flush()
     except OSError as exc:
-        raise EngineError(f"无法运行 {os.path.basename(args[0])}：{exc}") from exc
+        raise EngineError("输出目录不可写", code="output_unwritable", action="settings",
+                          hint="请选择有写入权限的输出文件夹") from exc
+
+
+def _reserve_outputs(outdir: str, stem: str, extensions: tuple[str, ...]) -> list[str]:
+    """独占创建空文件占位；不同线程或应用实例也不会使用同一个输出名称。"""
+    number = 1
+    while True:
+        basename = stem if number == 1 else f"{stem} ({number})"
+        reserved = []
+        try:
+            for extension in extensions:
+                path = os.path.join(outdir, basename + extension)
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+                os.close(fd)
+                reserved.append(path)
+            return reserved
+        except FileExistsError:
+            for path in reserved:
+                os.unlink(path)
+            number += 1
+        except OSError:
+            for path in reserved:
+                os.unlink(path)
+            raise
 
 
 def ffprobe(path: str) -> dict:
@@ -484,7 +564,8 @@ def ffprobe(path: str) -> dict:
          "-show_entries", "stream=codec_name,sample_rate,channels",
          "-show_entries", "format=duration,bit_rate", "-of", "json", path])
     if out.returncode:
-        raise EngineError("ffprobe 无法解析解密结果：" + out.stderr.strip()[:200])
+        raise EngineError("无法读取解密后的音频", code="invalid_audio", action="help",
+                          hint="请在 QQ 音乐重新下载该文件；当前格式也可能尚不支持")
     d = json.loads(out.stdout)
     st = (d.get("streams") or [{}])[0]
     fm = d.get("format", {})
@@ -512,7 +593,8 @@ def to_mp3(ogg: str, mp3: str, tags: dict, bitrate: str, cover: str | None = Non
              "-id3v2_version", "3", "-write_id3v1", "1", mp3]
     proc = _run_media(args)
     if proc.returncode:
-        raise EngineError("ffmpeg 转码失败：" + proc.stderr.strip()[:300])
+        raise EngineError("MP3 转换失败", code="encode_failed", action="retry",
+                          hint="确认磁盘空间充足后重试；若仅此文件失败，请重新下载该文件")
 
 
 def decrypt_file(path: str, outdir: str, bitrate: str = "320k",
@@ -526,9 +608,13 @@ def decrypt_file(path: str, outdir: str, bitrate: str = "320k",
             progress(name, ratio)
 
     step("读取文件", 0.02)
-    size = os.path.getsize(path)
-    with open(path, "rb") as f:
-        data = f.read()
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as exc:
+        raise EngineError("无法读取源文件", code="source_unreadable", action="retry",
+                          hint="确认文件仍在原位置且有读取权限，然后重试") from exc
 
     step("识别格式", 0.08)
     kind, meta, audio_end = detect_footer(data)
@@ -538,26 +624,37 @@ def decrypt_file(path: str, outdir: str, bitrate: str = "320k",
     step("获取密钥", 0.15)
     if kind == "musicex":
         if not meta.get("media_mid"):
-            raise EngineError("musicex 尾部缺少 media_mid，无法获取 ekey")
+            raise EngineError("文件缺少必要的解密信息", code="unsupported_format", action="help",
+                              hint="请在 QQ 音乐重新下载该文件；当前格式也可能尚不支持")
         ekey = cache.get(meta["media_mid"], meta["filename"])
     elif kind in ("QTag", "V1"):
         ekey = meta.get("ekey", "")
         if not ekey:
-            raise EngineError(f"{kind} 尾部未解析出 ekey")
+            raise EngineError("文件缺少必要的解密信息", code="unsupported_format", action="help",
+                              hint="请在 QQ 音乐重新下载该文件")
     else:
-        raise EngineError("无法识别的尾部格式（既不是 musicex / QTag / V1）")
+        raise EngineError("暂不支持此文件格式", code="unsupported_format", action="help",
+                          hint="扩展名匹配不代表加密格式兼容；可尝试在 QQ 音乐重新下载")
 
     step("解密音频流", 0.25)
     make_cipher(parse_ekey(ekey)).decrypt(0, body)
     headers = {b"OggS": ".ogg", b"fLaC": ".flac"}
     audio_ext = headers.get(bytes(body[:4]))
     if audio_ext is None:
-        raise EngineError(f"解密结果不是支持的 OGG / FLAC 音频（头部 {bytes(body[:4])!r}）")
+        raise EngineError("无法解密此文件", code="invalid_audio", action="help",
+                          hint="文件可能损坏、密钥已失效或格式尚不支持；请重新下载后重试")
 
-    os.makedirs(outdir, exist_ok=True)
+    check_output_dir(outdir)
     stem = os.path.splitext(os.path.basename(path))[0]
-    tmpdir = tempfile.mkdtemp(prefix="qmdec-")
+    # 与最终文件同一磁盘，发布时可以原子替换本次独占创建的占位文件。
+    try:
+        tmpdir = tempfile.mkdtemp(prefix=".qmdec-", dir=outdir)
+    except OSError as exc:
+        raise EngineError("无法创建输出文件", code="output_unwritable", action="settings",
+                          hint="请检查磁盘空间或选择其他输出文件夹") from exc
     ogg = os.path.join(tmpdir, stem + audio_ext)
+    reserved = []
+    complete = False
     try:
         step("写入中间文件", 0.4)
         with open(ogg, "wb") as f:
@@ -570,16 +667,34 @@ def decrypt_file(path: str, outdir: str, bitrate: str = "320k",
         step("转码 MP3", 0.6)
         tags = db_lookup(path) or _parse_name(path)
         cover = find_cover(tags.get("song_id"))
-        mp3 = os.path.join(outdir, stem + ".mp3")
-        to_mp3(ogg, mp3, tags, bitrate, cover)
+        staged_mp3 = os.path.join(tmpdir, "output.mp3")
+        to_mp3(ogg, staged_mp3, tags, bitrate, cover)
+        if not os.path.getsize(staged_mp3):
+            raise EngineError("MP3 转换结果为空", code="encode_failed", action="retry",
+                              hint="请重新下载该文件后重试")
+        extensions = (".mp3", audio_ext) if keep_ogg else (".mp3",)
+        reserved = _reserve_outputs(outdir, stem, extensions)
+        mp3 = reserved[0]
+        os.replace(staged_mp3, mp3)
         if keep_ogg:
-            shutil.move(ogg, os.path.join(outdir, stem + audio_ext))
+            os.replace(ogg, reserved[1])
+        complete = True
+    except OSError as exc:
+        raise EngineError("无法保存转换结果", code="output_unwritable", action="settings",
+                          hint="请检查磁盘空间或选择其他输出文件夹后重试") from exc
     finally:
+        if not complete:
+            for reserved_path in reserved:
+                try:
+                    os.unlink(reserved_path)
+                except OSError:
+                    pass
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     step("完成", 1.0)
     return {"src": path, "footer": kind, "mp3": mp3,
             "size": os.path.getsize(mp3), "src_size": size,
+            "original": reserved[1] if keep_ogg else None,
             "codec": info["codec"], "src_bitrate": info["bitrate"],
             "duration": info["duration"], "tags": tags, "cover": bool(cover)}
 
@@ -610,10 +725,9 @@ def credential_help() -> dict:
                  "ok": any(os.path.exists(p) for p in cookies)},
             ],
             "steps": [
-                "确认本机装了 QQ 音乐 PC 客户端，并且**已登录**（登录后配置文件才会写出来）",
-                "关掉本程序，重新打开一次；登录过就点界面上的「重新检测登录」",
-                "刚登录还是不行：在 QQ 音乐里随便播放一首会员歌（触发凭据落盘），再重试",
-                "本机没装 QQ 音乐客户端：装一个并登录即可，不需要开会员也能读凭据",
+                "打开 QQ 音乐 PC 客户端并登录",
+                "回到本软件，点「重新检测」",
+                "仍未检测到：播放要转换的歌曲后再检测；新版客户端的凭据格式可能尚不兼容",
             ],
             "note": "只读取你自己账号的配置文件，不碰其它进程内存，也不修改客户端。",
         }
@@ -622,7 +736,7 @@ def credential_help() -> dict:
         "checks": [{"name": "登录凭据 plist", "path": PLIST, "ok": os.path.exists(PLIST)}],
         "steps": [
             "打开 QQ 音乐客户端并完成登录",
-            "回到本软件，点「重新检测登录」",
+            "回到本软件，点「重新检测」",
         ],
         "note": "只读取你自己账号的 plist，不修改客户端。",
     }
@@ -634,6 +748,8 @@ def engine_status() -> dict:
     ffp = os.path.isfile(FFPROBE) or bool(shutil.which("ffprobe"))
     st = {"ffmpeg": ff, "ffprobe": ffp,
           "credentials": False, "account": None, "error": None,
+          "credential_error": None, "dependency_error": None,
+          "action": None, "hint": "",
           "cache_dir": CACHE_DIR, "cache_exists": os.path.isdir(CACHE_DIR),
           "db": os.path.exists(SQLITE), "platform": "windows" if IS_WIN else "macos"}
     try:
@@ -643,10 +759,17 @@ def engine_status() -> dict:
         st["login_type"] = cred.login_type
     except EngineError as exc:
         st["error"] = str(exc)
+        st["credential_error"] = exc.as_dict()
+        st["action"], st["hint"] = exc.action, exc.hint
         st["help"] = credential_help()
     missing = [name for name, ready in (("ffmpeg", ff), ("ffprobe", ffp)) if not ready]
     if missing:
-        st["error"] = "缺少 " + " / ".join(missing) + ("" if IS_WIN else "，请先执行：brew install ffmpeg")
+        error = EngineError("缺少 " + " / ".join(missing),
+                            code="dependencies", action="dependencies",
+                            hint="请重新下载并完整解压应用；源码运行请安装 FFmpeg")
+        st["error"] = str(error)
+        st["dependency_error"] = error.as_dict()
+        st["action"], st["hint"] = error.action, error.hint
     return st
 
 

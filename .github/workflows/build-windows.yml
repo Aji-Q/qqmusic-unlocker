@@ -47,7 +47,20 @@ jobs:
           $bin = Get-ChildItem fftmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           Copy-Item $bin.FullName ffmpeg.exe
           Copy-Item (Join-Path $bin.Directory "ffprobe.exe") ffprobe.exe
-          "ffmpeg 版本:"; ./ffmpeg.exe -hide_banner -version | Select-Object -First 1
+          $ffVersion = (./ffmpeg.exe -hide_banner -version | Select-Object -First 1)
+          Write-Output $ffVersion
+          $appVersion = python -c "import sys; sys.path.insert(0, 'app'); from version import APP_VERSION; print(APP_VERSION)"
+          @{
+            app_version = $appVersion
+            source_commit = $env:GITHUB_SHA
+            source_ref = $env:GITHUB_REF
+            build_url = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            platform = "windows-x64"
+            python = (python --version)
+            ffmpeg_version = $ffVersion
+            ffmpeg_archive_url = "$base/ffmpeg-release-essentials.zip"
+            ffmpeg_archive_sha256 = $got
+          } | ConvertTo-Json | Set-Content -Encoding utf8 BUILD-INFO.json
           # 确认带 libmp3lame（转 MP3 必需）
           if (-not (./ffmpeg.exe -hide_banner -encoders 2>&1 | Select-String libmp3lame)) {
             throw "ffmpeg 不含 libmp3lame 编码器"
@@ -103,11 +116,14 @@ jobs:
           FFmpeg 项目：https://ffmpeg.org/   源码：https://github.com/FFmpeg/FFmpeg
           "@ | Set-Content -Encoding utf8 "$dst\LICENSES\FFMPEG.txt"
           if (Test-Path README.md) { Copy-Item README.md "$dst\README.md" }
+          Copy-Item win\快速开始.txt $dst -Force
+          Copy-Item BUILD-INFO.json $dst -Force
           # 使用辅助脚本：拖文件到 bat 上转换 / 一键建桌面快捷方式
           Copy-Item win\Convert-dropped-files.bat $dst -Force
           Copy-Item "win\创建桌面快捷方式.ps1" $dst -Force
-          $zip = "QQ音乐解锁器-windows-x64.zip"
-          Compress-Archive -Path "$dst\*" -DestinationPath $zip -Force
+          $zip = "QQMusicUnlocker-windows-x64.zip"
+          # 保留单一顶层目录，避免用户将 exe 与 _internal 拆开。
+          Compress-Archive -Path $dst -DestinationPath $zip -Force
           $h = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           "$h  $zip" | Set-Content -Encoding utf8 "$zip.sha256"
           "SHA256: $h"
@@ -115,20 +131,29 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: QQ音乐解锁器-windows-x64
+          name: QQMusicUnlocker-windows-x64
           path: |
-            QQ音乐解锁器-windows-x64.zip
-            QQ音乐解锁器-windows-x64.zip.sha256
+            QQMusicUnlocker-windows-x64.zip
+            QQMusicUnlocker-windows-x64.zip.sha256
 
       - name: 打标签时发 Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
           files: |
-            QQ音乐解锁器-windows-x64.zip
-            QQ音乐解锁器-windows-x64.zip.sha256
+            QQMusicUnlocker-windows-x64.zip
+            QQMusicUnlocker-windows-x64.zip.sha256
           body: |
-            Windows x64 版（自带 ffmpeg）。解压后运行 `QQMusicUnlocker.exe`。
-            构建包含离线转码与 WebView2 窗口自检；真实账号解密需在本机验证。
-            需要 QQ 音乐 PC 客户端登录态；缺少 WebView2 时安装微软 Evergreen Runtime。
-            校验：`Get-FileHash QQ音乐解锁器-windows-x64.zip -Algorithm SHA256`
+            从下方 Assets 下载与你的电脑对应的应用包。`Source code` 是源码，不是应用。
+
+            - Windows x64：`QQMusicUnlocker-windows-x64.zip`。完整解压后打开文件夹内的 `QQMusicUnlocker.exe`；缺少 WebView2 时应用会引导前往微软官网。
+            - Mac Apple 芯片：`QQMusicUnlocker-macos-arm64.zip`；Mac Intel：`QQMusicUnlocker-macos-x64.zip`。需要 macOS 15 或更新版本，解压后把 app 拖进「应用程序」。
+
+            应用包自带 Python 与 ffmpeg，无需另装开发工具。Mac 包尚未通过 Developer ID 公证；首次打开被拦截时，请先核对下载来源，再到「系统设置 → 隐私与安全性 → 仍要打开」。
+
+            打开 QQ 音乐并登录，在 QQ 音乐中下载歌曲；把本地加密文件拖入本应用即可转换。输出目录与码率会记住，同名结果自动编号。
+
+            [安装、使用与故障处理](https://github.com/Aji-Q/qqmusic-unlocker#readme)。包内 `BUILD-INFO.json` 记录源码提交与打包依赖，`.sha256` 用于校验下载完整性。
+            本次构建运行离线转码和窗口检查；真实 Windows QQ 音乐账号与在线解密尚未完成实机验证。
+            源码提交：`${{ github.sha }}`；[构建日志](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})。

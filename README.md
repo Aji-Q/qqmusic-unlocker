@@ -1,97 +1,95 @@
 # QQ 音乐解锁器
 
-将本机 QQ 音乐加密音频转换为 MP3。米白／黑色界面，音频在本机处理。
-`musicex` 格式需要联网获取本人账号有权访问的解密密钥。
+把本机 QQ 音乐加密文件转换为 MP3。音频在本机处理；部分新格式需要联网获取本人账号有权访问的密钥。
 
-## 使用
+## 下载与安装
 
-1. 打开应用，拖入文件或文件夹，自动转换；也可选择文件或输入路径。
-2. 在「输出设置」选择目录、码率，按需保留原格式（OGG / FLAC）。设置作用于当前会话。
-3. 完成后打开输出文件夹；失败原因在队列和日志中查看，可重试失败项。
+从 [最新 Release](https://github.com/Aji-Q/qqmusic-unlocker/releases/latest) 的 **Assets** 下载应用包。不要下载 `Source code`，那是给开发者的源码。
 
-支持 `.mgg`、`.mflac`、`.qmcogg`、`.qmcflac` 等 QMC2 文件。
-当前支持解密后的 OGG / FLAC 音频流；扩展名本身不保证格式兼容。
-账号状态可点击查看，详细路径与处理步骤折叠在「排查详情」。
+| 电脑 | 下载文件 | 安装方式 |
+| --- | --- | --- |
+| Windows x64 | `QQMusicUnlocker-windows-x64.zip` | 完整解压，打开 `QQMusicUnlocker` 文件夹内的 `QQMusicUnlocker.exe` |
+| Mac Apple 芯片，macOS 15+ | `QQMusicUnlocker-macos-arm64.zip` | 解压，把 `QQ音乐解锁器.app` 拖进「应用程序」 |
+| Mac Intel，macOS 15+ | `QQMusicUnlocker-macos-x64.zip` | 同上 |
 
-## Windows
+Mac 的芯片类型在苹果菜单 →「关于本机」中查看。应用包自带 Python、ffmpeg 和 ffprobe，无需安装开发工具。
 
-- 下载 [Actions 构建产物](https://github.com/Aji-Q/qqmusic-unlocker/actions/workflows/build-windows.yml) 中的 `QQ音乐解锁器-windows-x64`，完整解压后运行 `QQMusicUnlocker.exe`。
-- 程序内置 ffmpeg / ffprobe，需安装 [Microsoft WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。不要只复制 exe。
-- 可把文件或目录拖到 exe / `Convert-dropped-files.bat` 上，程序会打开窗口并转换。
-- `创建桌面快捷方式.ps1` 用于创建桌面快捷方式。
-- 新格式需要 QQ 音乐 PC 客户端已登录。程序只读取当前用户 `%APPDATA%\Tencent\QQMusic\` 下的配置与 cookie 文件，不读取进程内存。
+- **Windows**：保留整个解压文件夹，不能单独移动 exe。缺少 WebView2 时，程序会提供打开[微软官方下载页](https://developer.microsoft.com/microsoft-edge/webview2/#download-section)的按钮；安装 Evergreen Runtime 后重开应用。
+- **Mac 首次打开**：当前包尚未通过 Developer ID 公证。如果系统阻止打开，请先确认来自本仓库 Release，再按 [Apple 官方方法](https://support.apple.com/zh-cn/102445)，到「系统设置 → 隐私与安全性 → 仍要打开」。
+- **快捷启动**：Windows 右键 exe →「显示更多选项」→「发送到 → 桌面快捷方式」；Mac 从「应用程序」拖到 Dock。快捷方式指向安装目录，文件夹移动后需重建。
+- **更新**：先退出旧版，再在原安装位置替换应用或完整的 Windows 文件夹。不要只替换 exe，也不要继续使用另一个旧副本。输出设置会保留。
 
-### 验证范围
+## 第一次使用
 
-工作流在 push、PR 或手动运行时执行以下检查，结果以对应提交的 Actions 为准：
+1. 在电脑的 QQ 音乐中登录并下载歌曲。在 QQ 音乐「设置」中查看下载目录，或在已下载歌曲的右键菜单中查找打开文件位置。需要的是本地音频文件，歌单链接和播放缓存不能直接转换。
+2. 打开解锁器，确认「输出设置」中的保存目录。把文件或文件夹拖进窗口，会自动开始；也可点「选择文件」「选择文件夹」或「输入路径」。
+3. 完成后点「打开文件夹」。失败时查看对应原因，按提示处理后点「重试失败项」。右上角「使用帮助」随时可打开。
 
-- Python 离线回归：路径、队列、凭据文本解析、无控制台输出、音频格式。
-- 打包 exe 离线自检：资源、HTTP、中文与空格路径、ffmpeg 实际转码。
-- WebView2 自检：实际初始化窗口、加载页面和注册原生拖拽桥。
+输出目录、码率和「同时保存解密后的 OGG / FLAC」会记住。原格式指解密后的 OGG / FLAC；勾选后会在 MP3 之外额外保存一份。程序不修改输入文件，已有同名输出会自动编号保留。
 
-**上述检查不等同于真实 QQ 音乐客户端验收。** 仍需在 Windows 上用本人文件验证：登录态读取、`musicex` 在线密钥接口、真实文件／目录拖放、原生文件选择器和资源管理器定位。客户端文件格式或接口变化可能导致失败。
+支持 `.mgg`、`.mflac`、`.qmcogg`、`.qmcflac` 等 QMC2 文件，且解密后必须是 OGG 或 FLAC。扩展名相同不代表内部格式一定兼容。
 
-## macOS
+## 遇到问题
 
-运行 `dist/QQ音乐解锁器.app`；需要 Python 3 和 ffmpeg：
+| 状态或现象 | 下一步 |
+| --- | --- |
+| 账号未就绪 | 打开本机 QQ 音乐，登录下载该歌曲的账号，然后在应用内「重新检测」。部分旧格式无需账号，仍可尝试转换 |
+| 没有找到文件 | 查看 QQ 音乐的下载目录；确认文件已下载完成、扩展名受支持。重复文件不会重复加入队列 |
+| 无法写入输出目录 | 在「输出设置」改选可写入的本地文件夹，然后重试 |
+| 缺少转码组件 | 重新下载并完整解压对应应用包；不要单独复制 exe |
+| 获取密钥失败或被拒绝 | 查看该文件的具体提示，检查网络和本机账号；确认 QQ 音乐本身能播放这份下载文件，再重新检测并重试 |
+| 不支持的格式 | 在 QQ 音乐中重新下载后再试；仍失败时保留原文件，不要只修改扩展名 |
+| 界面还是旧版 | 退出所有副本，从刚替换的安装目录直接打开；检查 Dock / 桌面快捷方式是否指向旧位置 |
 
-```bash
-brew install ffmpeg
-./build.sh
-open dist/QQ音乐解锁器.app
-```
+仍无法解决时，在「使用帮助」中复制排查信息，附上操作步骤和错误提示提交到 [Issues](https://github.com/Aji-Q/qqmusic-unlocker/issues)。不要附账号 cookie、密钥或付费音频。
 
-界面运行在原生窗口中，支持拖到窗口或应用图标。窗口关闭时后台服务一起退出。
+## 验证范围
 
-## 开发
+构建工作流会执行离线回归、打包后真实 WAV → MP3 转码、中文／空格路径和资源检查；Windows 还实际加载 WebView2 窗口并注册拖拽桥。每个包的 `BUILD-INFO.json` 记录源码提交及构建依赖，下载旁的 `.sha256` 可校验文件完整性。
+
+**真实 Windows QQ 音乐账号及在线解密尚未完成实机验证。** 自动检查不能代替本机登录态读取、实际文件拖放、文件选择器和客户端格式兼容性验收。Mac 未公证，首次下载安装也可能需要上面的系统确认步骤。
+
+## 开发与检查
+
+普通使用请下载 Release。本节仅用于从源码构建。
 
 ```text
 app/qmengine.py       解密、转码与平台路径
-app/server.py         本地 HTTP 服务、队列与文件选择
-app/ui/              两个平台共用的界面
-app/wincred.py       Windows 凭据文件解析
-native/main.m        macOS 窗口入口
-win/launcher.py      Windows WebView2 入口和自检
+app/server.py        本地服务、队列与文件选择
+app/settings.py      输出设置的持久化
+app/ui/              共用界面
+app/wincred.py       Windows 凭据文本解析
+native/main.m        macOS 原生窗口
+win/launcher.py      Windows 窗口和自检
 QQMusicUnlocker.spec Windows 打包清单
 ```
 
-### 离线检查
+离线检查（第二条需要 ffmpeg / ffprobe，不读取账号凭据或调用 QQ 音乐接口）：
 
 ```bash
 python -m unittest discover -s tests -v
 python win/launcher.py --selftest --selftest-report selftest.json
 ```
 
-第二条需要 ffmpeg 和 ffprobe；不读取真实登录凭据，也不访问 QQ 音乐接口。
-
-### Windows 构建
-
-在 Windows x64 / Python 3.12 环境执行，先把 `ffmpeg.exe` 和 `ffprobe.exe` 放到仓库根目录：
+Windows x64 / Python 3.12 构建：先把 `ffmpeg.exe` 和 `ffprobe.exe` 放到仓库根目录。
 
 ```powershell
 python -m pip install "pyinstaller==6.*" "pywebview==5.4"
 python -m PyInstaller --noconfirm --clean QQMusicUnlocker.spec
-$exe = ".\dist\QQMusicUnlocker\QQMusicUnlocker.exe"
-$p = Start-Process $exe -ArgumentList '--selftest --selftest-report selftest.json' -Wait -PassThru
+$p = Start-Process .\dist\QQMusicUnlocker\QQMusicUnlocker.exe -ArgumentList '--selftest --selftest-report selftest.json' -Wait -PassThru
 $p.ExitCode
 Get-Content selftest.json
 ```
 
-`--gui-selftest --selftest-report gui-selftest.json` 可验证 WebView2 初始化；此模式会加载首页并检测本机账号状态，但不会执行转换或请求在线密钥。
-GUI exe 无可靠标准输出，自检必须同时检查退出码和 JSON 中的 `ok`。
-工作流会保存自检报告；`v*` 标签额外发布 Release。
+`--gui-selftest --selftest-report gui-selftest.json` 检查 WebView2 初始化，会加载首页并检测本机账号状态，但不会转换或请求在线密钥。GUI exe 没有可靠标准输出，需同时检查退出码和 JSON 的 `ok`。自检使用临时设置目录，不修改用户偏好。工作流保留报告，`v*` 标签汇集成品至 Release 草稿；三个平台检查通过、ZIP 与校验文件齐全后再公开。
 
-### 命令行
+macOS 源码构建见 `build.sh`；开发环境需 Python 3、Xcode Command Line Tools 和 ffmpeg。发行包不需要这些依赖。
 
 ```bash
+python3 -m venv .venv
+.venv/bin/pip install "pyinstaller==6.*"
+PYTHON=.venv/bin/python ./build.sh
 ./launch.sh ~/Music/下载目录 -o ~/Desktop -b 320k
-python3 app/qmengine.py <文件或目录> -o <输出目录>
-./launch.sh --stop
 ```
 
-macOS 日志与服务信息位于 `~/Library/Logs/QQMusicUnlocker/`。
-
-## 边界
-
-仅处理本人账号下载到本机的音频用于个人备份。软件不修改 QQ 音乐客户端，
-不绕过会员权限；接口拒绝的资源会显示失败。随 Windows 包分发的 FFmpeg 构建采用 GPLv3，见包内 `LICENSES/`。
+仅处理本人账号下载到本机的音频用于个人备份。程序不修改 QQ 音乐客户端，不绕过会员权限；接口拒绝的资源会显示失败。随包分发的 FFmpeg 及其依赖许可见包内 `LICENSES/`。

@@ -74,7 +74,20 @@ th:last-child, td:last-child { padding-right: 0; }
 .resultMain { min-width: 0; }
 .result h2 { font-size: 16px; }
 .resultSub { margin-top: 3px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-.hasError h2, .notice { color: var(--error); }
+.hasError h2, .notice.isError { color: var(--error); }
+.notice > span { min-width: 0; overflow-wrap: anywhere; }
+.notice > .row { flex-shrink: 0; }
+.firstHelp { color: var(--muted); margin-top: 2px; }
+.hasItems .firstHelp { display: none; }
+.rowAction { margin: 4px 0 0 -9px; text-decoration: underline; text-underline-offset: 3px; }
+.quickSteps { margin: 0; padding-left: 22px; }
+.quickSteps li { padding-left: 6px; margin: 18px 0; }
+.quickSteps strong, .quickSteps span { display: block; }
+.quickSteps span { color: var(--muted); margin-top: 5px; font-size: 13px; }
+.accountState { border-top: 1px solid var(--line); padding-top: 16px; }
+.version { margin-top: 20px; }
+#settingsSaved { margin-left: 8px; }
+#pathError { margin-top: 10px; }
 .result .row { flex-shrink: 0; }
 .settingsCard { padding-top: 2px; }
 .settings { display: grid; grid-template-columns: minmax(0, 1fr) 144px; gap: 14px 24px; }
@@ -132,6 +145,7 @@ body.hasModal { overflow: hidden; }
   button { padding: 8px 12px; }
   .settings { grid-template-columns: 1fr; }
   .result { align-items: flex-start; flex-direction: column; }
+  .notice { align-items: flex-start; flex-direction: column; }
   .bottom { padding: 12px 16px; flex-wrap: wrap; gap: 12px; }
   .progressWrap { width: 100%; }
   .bottom .row { margin-left: auto; }
