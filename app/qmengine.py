@@ -305,12 +305,16 @@ def detect_footer(data: bytes):
     if len(data) >= 8 and data[-4:] == b"QTag":
         off = len(data) - 4
         try:
-            size = struct.unpack_from("<I", data, off - 4)[0]
+            # QTag length is big-endian; the untagged V1 length below is LE.
+            size = struct.unpack_from(">I", data, off - 4)[0]
         except struct.error:
             size = 0
-        if 0 < size <= off - 4:
-            key = data[off - 4 - size:off - 4]
+        if 0 < size < off - 4:
+            # Legacy QTag stores ekey,song_id,flags. Metadata is not key data.
+            key = data[off - 4 - size:off - 4].split(b",", 1)[0]
             return "QTag", {"ekey": key.decode("utf-8", "ignore")}, off - 4 - size
+        # A malformed explicit QTag must not be reinterpreted as a V1 footer.
+        return "unknown", {}, len(data)
     try:
         size = struct.unpack_from("<I", data, len(data) - 4)[0]
     except struct.error:
