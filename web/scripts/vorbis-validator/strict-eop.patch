@@ -1,0 +1,79 @@
+--- a/lib/floor0.c
++++ b/lib/floor0.c
+@@ -20,6 +20,9 @@
+ #include <ogg/ogg.h>
+ #include "vorbis/codec.h"
+ #include "codec_internal.h"
++
++/* Packet completeness hook for this restricted-profile validator. */
++extern void qqv_incomplete(vorbis_block *vb);
+ #include "registry.h"
+ #include "lpc.h"
+ #include "lsp.h"
+@@ -189,7 +192,10 @@
+       return(lsp);
+     }
+   }
++  if(ampraw>0)qqv_incomplete(vb);
++  return(NULL);
+  eop:
++  qqv_incomplete(vb);
+   return(NULL);
+ }
+ 
+--- a/lib/floor1.c
++++ b/lib/floor1.c
+@@ -20,6 +20,9 @@
+ #include <ogg/ogg.h>
+ #include "vorbis/codec.h"
+ #include "codec_internal.h"
++
++/* Packet completeness hook for this restricted-profile validator. */
++extern void qqv_incomplete(vorbis_block *vb);
+ #include "registry.h"
+ #include "codebook.h"
+ #include "misc.h"
+@@ -1034,7 +1037,9 @@
+ 
+     return(fit_value);
+   }
++  return(NULL);
+  eop:
++  qqv_incomplete(vb);
+   return(NULL);
+ }
+ 
+--- a/lib/res0.c
++++ b/lib/res0.c
+@@ -25,6 +25,9 @@
+ #include <ogg/ogg.h>
+ #include "vorbis/codec.h"
+ #include "codec_internal.h"
++
++/* Packet completeness hook for this restricted-profile validator. */
++extern void qqv_incomplete(vorbis_block *vb);
+ #include "registry.h"
+ #include "codebook.h"
+ #include "misc.h"
+@@ -705,8 +708,10 @@
+       }
+     }
+   }
++  return(0);
+  errout:
+  eopbreak:
++  qqv_incomplete(vb);
+   return(0);
+ }
+ 
+@@ -858,8 +863,10 @@
+       }
+     }
+   }
++  return(0);
+  errout:
+  eopbreak:
++  qqv_incomplete(vb);
+   return(0);
+ }
+ 

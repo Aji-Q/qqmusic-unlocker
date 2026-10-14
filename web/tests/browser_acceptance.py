@@ -96,7 +96,7 @@ with sync_playwright() as pw:
         ])
         page.locator('#start').click()
         expect(page.locator('.fileError')).to_have_count(2)
-        expect(page.locator('.fileError').first).to_contain_text('不满足当前恢复条件')
+        expect(page.locator('.fileError').first).to_contain_text('此文件暂不支持免密钥转换')
         expect(page.locator('.fileError a')).to_have_count(0)
         expect(page.locator('.download')).to_have_count(0)
         expect(page.locator('#start')).to_be_hidden()

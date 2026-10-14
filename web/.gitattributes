@@ -1,0 +1,3 @@
+# Preserve upstream license text and unified-diff context verbatim.
+scripts/vorbis-validator/licenses/*.txt -whitespace
+scripts/vorbis-validator/strict-eop.patch -whitespace

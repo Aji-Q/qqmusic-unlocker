@@ -60,7 +60,11 @@ function paddingCandidates(data) {
         if (known.has(index) && known.get(index) !== data[offset]) { consistent = false; break; }
         known.set(index, data[offset]);
       }
-      if (consistent && known.size >= 5000 && known.size <= STREAM) {
+      // Padding alignment can expose less than 5000 stream bytes even in a
+      // complete file. This admits only a seed: the repeated run, coherent
+      // CRC8 headers, regenerated key stream and final original frame CRCs
+      // still have to agree before any audio is returned.
+      if (consistent && known.size >= 4096 && known.size <= STREAM) {
         candidates.push({ known, shifts: new Map([[0, 0], [1, delta]]) });
         if (candidates.length === 4) return candidates;
       }

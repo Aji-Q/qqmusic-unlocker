@@ -1,6 +1,6 @@
 {
   "name": "qqmusic-unlocker-web",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@mediabunny/mp3-encoder": "1.61.3",
+    "cadical-wasm": "0.1.2",
     "mediabunny": "1.61.3"
   }
 }

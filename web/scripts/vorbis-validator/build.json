@@ -1,0 +1,30 @@
+{
+  "emscripten": "4.0.22",
+  "sources": {
+    "emsdk": {
+      "url": "https://github.com/emscripten-core/emsdk.git",
+      "commit": "8f685c26ee9f672081e61e22c6aa60fa972d00a9"
+    },
+    "vorbis": {
+      "url": "https://github.com/xiph/vorbis.git",
+      "commit": "1b75110b5a2754ba1931d82dd83cb822b266a21d"
+    },
+    "ogg": {
+      "url": "https://github.com/xiph/ogg.git",
+      "commit": "06a5e0262cdc28aa4ae6797627a783b5010440f0"
+    }
+  },
+  "patches": {
+    "strict-eop.patch": "086d5e597c5fff862d357607561d3bc22688c934bf9412b8de5d1a299aaef904"
+  },
+  "files": {
+    "src/vendor/vorbis-validator.js": {
+      "bytes": 9352,
+      "sha256": "f5f2caf9dbff7bf10d445ca469b80b179398c9d14d490c6565065cace22ab252"
+    },
+    "scripts/vorbis-validator/artifacts/vorbis-validator.wasm": {
+      "bytes": 70493,
+      "sha256": "0de39594e7095b38f5026b973fef3de14f760d436a870bdd308eb369681dea43"
+    }
+  }
+}

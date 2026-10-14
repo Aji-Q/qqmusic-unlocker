@@ -31,7 +31,7 @@ def private_write(path, data):
     path.chmod(0o600)
 
 
-def with_padding(source):
+def with_padding(source, metadata_bytes=0):
     if source[:4] != b"fLaC":
         raise ValueError("Expected native FLAC")
     blocks = []
@@ -52,6 +52,11 @@ def with_padding(source):
     # Reordering/removing padding does not alter any original audio frame CRC.
     metadata = b"".join(bytes([kind]) + len(data).to_bytes(3, "big") + data
                         for kind, data in blocks)
+    if metadata_bytes:
+        # A public APPLICATION block changes padding alignment without
+        # modifying the audio frames or their original checksums.
+        application = b"TEST" + bytes(metadata_bytes)
+        metadata += b"\x02" + len(application).to_bytes(3, "big") + application
     return (b"fLaC" + metadata + bytes([0x81]) + (8192).to_bytes(3, "big")
             + bytes(8192) + source[position:])
 
@@ -98,9 +103,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--ffmpeg", default=shutil.which("ffmpeg"))
+    parser.add_argument("--metadata-bytes", type=int, default=0,
+                        help="Add public metadata before padding to exercise shorter seed coverage")
     args = parser.parse_args()
     if not args.ffmpeg:
         parser.error("FFmpeg is required; pass --ffmpeg /path/to/ffmpeg")
+    if not 0 <= args.metadata_bytes <= 2048:
+        parser.error("--metadata-bytes must be between 0 and 2048")
     private = args.output / "private"
     inputs = args.output / "inputs"
     private.mkdir(parents=True, exist_ok=True)
@@ -113,10 +122,12 @@ def main():
         "-metadata", "title=Independent synthetic FLAC recovery fixture", "-y", str(source),
     ], check=True)
     source.chmod(0o600)
-    plain = with_padding(source.read_bytes())
+    plain = with_padding(source.read_bytes(), args.metadata_bytes)
     private_write(private / "expected.flac", plain)
     records = []
-    for number in range(3):
+    # Case 21 independently exposes only 4973 repeated-stream bytes. Keep it
+    # as a regression for rejecting valid seeds below the old 5000-byte gate.
+    for number in (0, 1, 2, 21):
         key = hashlib.shake_256(
             f"independent-flac-blind-fixture-{number}-20261014".encode()).digest(PERIOD)
         output = transform(plain, key)

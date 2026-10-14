@@ -266,6 +266,9 @@ async function embeddedKey(file) {
  * @returns {Promise<{data: Uint8Array, extension: string, name: string, decrypted: boolean}>}
  */
 export async function decryptFile(file, onProgress = () => {}) {
+  const notify = onProgress; let lastProgress = 0;
+  onProgress = value => { lastProgress = Math.max(lastProgress, value); notify(lastProgress); };
+  const started = performance.now();
   if (!file || typeof file.slice !== 'function' || !Number.isSafeInteger(file.size)) {
     fail('invalid_file', '请选择音频文件');
   }
@@ -290,8 +293,8 @@ export async function decryptFile(file, onProgress = () => {}) {
     }
     throw error;
   }
-  if (footer.recoverFromFile && footer.bodyEnd < 1025 * 5120) {
-    fail('file_only_unsupported', '暂时无法仅凭此文件转换', '文件较短，不满足当前恢复条件。');
+  if (footer.recoverFromFile && footer.bodyEnd < 2_000_000) {
+    fail('file_only_unsupported', '此文件暂不支持免密钥转换');
   }
   if (footer.recoverFromFile && footer.bodyEnd > 100 * 1024 * 1024) {
     fail('file_too_large', '文件超过 100 MB 上限');
@@ -308,9 +311,28 @@ export async function decryptFile(file, onProgress = () => {}) {
       const [{ recoverOggStream }, { recoverFileKey, verifyRecoveredOgg }] = await Promise.all([
         import('./file-only-stream.js'), import('./file-only-key.js'),
       ]);
-      const observations = await recoverOggStream(data, value => onProgress(value * 0.7));
-      footer.key = recoverFileKey(observations, value => onProgress(0.7 + value * 0.15));
-      verify = verifyRecoveredOgg;
+      if (data.length >= 1025 * 5120) {
+        try {
+          const observations = recoverOggStream(data, value => onProgress(value * 0.7));
+          footer.key = recoverFileKey(observations, value => onProgress(0.7 + value * 0.15));
+          verify = verifyRecoveredOgg;
+        } catch (error) {
+          if (!['file_only_unsupported', 'invalid_data'].includes(error.code)) throw error;
+        }
+      }
+      if (!footer.key) {
+        const { recoverShortOgg } = await import('./file-only-short-ogg.js');
+        const checkpoint = () => {
+          if (performance.now() - started > 150_000) fail('recovery_timeout', '文件分析超时，请尝试其他文件');
+        };
+        try { data = await recoverShortOgg(data, value => onProgress(value * 0.99), { checkpoint }); }
+        catch (error) {
+          if (error.code === 'recovery_timeout') throw error;
+          fail('file_only_unsupported', '此文件暂不支持免密钥转换');
+        }
+        onProgress(1);
+        return { data, extension: '.ogg', name, decrypted: true };
+      }
     }
   }
   const cipher = makeCipher(footer.key);
