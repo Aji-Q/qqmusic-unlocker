@@ -1,6 +1,6 @@
 """Fresh-profile file-only recovery and download acceptance.
 
-Usage: python tests/file_only_browser.py URL INPUT.mgg OUTPUT_DIRECTORY [OGG_SHA256]
+Usage: python tests/file_only_browser.py URL INPUT.mgg OUTPUT_DIRECTORY [MP3_SHA256]
 The selected music file is the only input sent to the web app. No key is loaded.
 """
 from pathlib import Path
@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from playwright.sync_api import sync_playwright, expect
+from mp3_validation import assert_mp3_320k
 
 url, source, destination = sys.argv[1:4]
 expected_sha = sys.argv[4] if len(sys.argv) > 4 else None
@@ -62,55 +63,66 @@ with sync_playwright() as pw:
         response = page.goto(url)
         assert response.status == 200
         assert context.cookies() == []
-        for output_format in ['original', 'mp3']:
-            if output_format == 'mp3' and browser_name == 'webkit':
-                continue  # Native WebKit codecs vary; original recovery is the key acceptance.
-            page.locator('#format').select_option(output_format)
-            print(f'{browser_name}: {output_format}', flush=True)
-            page.locator('#files').set_input_files(str(source))
-            if output_format == 'original':
-                page.locator('#start').click()
-                expect(page.locator('.fileStatus')).to_contain_text('%', timeout=30000)
-                page.locator('#cancel').click()
-                expect(page.locator('.fileStatus')).to_have_text('已停止 · 可继续')
-                expect(page.locator('#start')).to_be_enabled()
-                assert page.evaluate('window.__activeWorkers.size') == 0
-                expect(page.locator('.download')).to_have_count(0)
-            started = time.monotonic()
-            page.locator('#start').click()
-            page.locator('.download, .fileError').first.wait_for(state='visible', timeout=240000)
-            if page.locator('.fileError').count():
-                page.screenshot(path=str(destination / f'{browser_name}-error.png'), full_page=True)
-                raise AssertionError([page.locator('.fileError').all_text_contents(), page.evaluate('window.__workerErrors')])
-            page.locator('.download').wait_for(timeout=10000)
-            expect(page.locator('.fileError')).to_have_count(0)
-            with page.expect_download() as event:
-                page.locator('.download').click()
-            download = event.value
-            output = destination / f'{browser_name}-{output_format}{Path(download.suggested_filename).suffix}'
-            download.save_as(str(output))
-            digest = hashlib.sha256(output.read_bytes()).hexdigest()
-            if output_format == 'original' and expected_sha:
-                assert digest == expected_sha, (browser_name, digest)
-            probe = json.loads(subprocess.check_output([
-                'ffprobe', '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(output),
-            ]))
-            decode = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output), '-f', 'null', '-'], capture_output=True)
-            assert decode.returncode == 0 and not decode.stderr, decode.stderr.decode()
-            expected_codec = 'vorbis' if output_format == 'original' else 'mp3'
-            assert probe['streams'][0]['codec_name'] == expected_codec
-            page.screenshot(path=str(destination / f'{browser_name}-{output_format}.png'), full_page=True)
+        expect(page.locator('#format, #bitrate, #summary, #substatus')).to_have_count(0)
+        expect(page.locator('#start')).to_be_hidden()
+        print(f'{browser_name}: mp3 320 kbps', flush=True)
+        page.locator('#files').set_input_files(str(source))
+        page.locator('#start').click()
+        expect(page.locator('.fileStatus')).to_contain_text('%', timeout=30000)
+        expect(page.locator('#start')).to_be_hidden()
+        page.locator('#cancel').click()
+        expect(page.locator('.fileStatus')).to_have_text('已停止 · 可继续')
+        expect(page.locator('#start')).to_be_visible()
+        expect(page.locator('#start')).to_be_enabled()
+        assert page.evaluate('window.__activeWorkers.size') == 0
+        expect(page.locator('.download')).to_have_count(0)
+        started = time.monotonic()
+        page.locator('#start').click()
+        page.locator('.download, .fileError').first.wait_for(state='visible', timeout=240000)
+        if page.locator('.fileError').count():
+            page.screenshot(path=str(destination / f'{browser_name}-error.png'), full_page=True)
+            error = page.locator('.fileError').all_text_contents()
             results.append({
-                'browser': browser_name, 'format': output_format,
-                'codec': expected_codec, 'sha256': digest,
-                'duration': float(probe['format']['duration']),
-                'seconds': round(time.monotonic() - started, 2),
+                'browser': browser_name, 'format': 'mp3', 'status': 'failed',
+                'error': error, 'no_download': page.locator('.download').count() == 0,
                 'no_page_errors': not page_errors, 'no_uploads_or_external_requests': not blocked,
-                'fresh_profile': True, 'inputs': 'music file only',
-                'cancel_and_restart': output_format == 'original',
             })
-            assert not blocked and not page_errors, (blocked, page_errors)
-            page.locator('#clear').click()
+            (destination / 'browser-recovery.json').write_text(json.dumps(results, ensure_ascii=False, indent=2))
+            raise AssertionError([error, page.evaluate('window.__workerErrors')])
+        page.locator('.download').wait_for(timeout=10000)
+        expect(page.locator('.fileError')).to_have_count(0)
+        expect(page.locator('#start')).to_be_hidden()
+        expect(page.locator('#cancel')).to_be_hidden()
+        with page.expect_download() as event:
+            page.locator('.download').click()
+        download = event.value
+        assert Path(download.suggested_filename).suffix == '.mp3'
+        output = destination / f'{browser_name}-mp3.mp3'
+        download.save_as(str(output))
+        digest = hashlib.sha256(output.read_bytes()).hexdigest()
+        if expected_sha:
+            assert digest == expected_sha, (browser_name, digest)
+        probe = json.loads(subprocess.check_output([
+            'ffprobe', '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(output),
+        ]))
+        decode = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output), '-f', 'null', '-'], capture_output=True)
+        assert decode.returncode == 0 and not decode.stderr, decode.stderr.decode()
+        assert probe['streams'][0]['codec_name'] == 'mp3'
+        audio_frames = assert_mp3_320k(output)
+        page.screenshot(path=str(destination / f'{browser_name}-mp3.png'), full_page=True)
+        results.append({
+            'browser': browser_name, 'format': 'mp3', 'status': 'passed',
+            'codec': 'mp3', 'bitrate': 320000, 'sha256': digest,
+            'audio_frames_320k': audio_frames, 'ffprobe_average_bitrate': int(probe['streams'][0]['bit_rate']),
+            'duration': float(probe['format']['duration']),
+            'seconds': round(time.monotonic() - started, 2),
+            'no_page_errors': not page_errors, 'no_uploads_or_external_requests': not blocked,
+            'fresh_profile': True, 'inputs': 'music file only',
+            'cancel_and_restart': True, 'completed_start_hidden': True,
+        })
+        assert not blocked and not page_errors, (blocked, page_errors)
+        (destination / 'browser-recovery.json').write_text(json.dumps(results, ensure_ascii=False, indent=2))
+        page.locator('#clear').click()
         context.close()
         browser.close()
 

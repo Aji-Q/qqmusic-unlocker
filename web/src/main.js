@@ -5,21 +5,6 @@ const $ = id => document.getElementById(id);
 const MAX_FILE = 100 * 1024 * 1024, MAX_TOTAL = 200 * 1024 * 1024, MAX_COUNT = 20;
 let items = [], busy = false, controller = null, nextId = 0;
 const size = n => `${(n / 1024 / 1024).toFixed(n < 1024 * 1024 ? 2 : 1)} MB`;
-const mime = { '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.ogg': 'audio/ogg', '.wav': 'audio/wav' };
-
-try {
-  const saved = JSON.parse(localStorage.getItem('qqmusic-web-preferences'));
-  if (['mp3', 'original'].includes(saved?.format)) $('format').value = saved.format;
-  if (['128', '192', '256', '320'].includes(saved?.bitrate)) $('bitrate').value = saved.bitrate;
-} catch { /* Preferences are optional in private browsing. */ }
-function settingsChanged() {
-  $('bitrateField').hidden = $('format').value !== 'mp3';
-  $('formatHint').textContent = $('format').value === 'mp3' ? '兼容常用播放器 · 可调整码率。' : '解密后直接保存，不再次压缩。';
-  try { localStorage.setItem('qqmusic-web-preferences', JSON.stringify({ format: $('format').value, bitrate: $('bitrate').value })); } catch { /* No persistence required. */ }
-}
-$('format').addEventListener('change', settingsChanged);
-$('bitrate').addEventListener('change', settingsChanged);
-settingsChanged();
 
 function notice(message, error = false) {
   $('notice').textContent = message;
@@ -34,23 +19,21 @@ function render() {
   $('count').textContent = items.length;
   $('queue').hidden = !items.length; $('empty').hidden = !!items.length;
   const pending = items.filter(i => i.state === 'pending').length;
-  const complete = items.filter(i => i.state === 'done').length;
   const failed = items.filter(i => i.state === 'error').length;
+  $('start').hidden = busy || !pending;
   $('start').disabled = busy || !pending;
-  $('start').innerHTML = complete || failed ? '继续转换 <span aria-hidden="true">→</span>' : '开始转换 <span aria-hidden="true">→</span>';
   $('clear').disabled = busy || !items.length;
   $('cancel').hidden = !busy;
   $('retry').hidden = busy || !failed;
-  $('format').disabled = busy; $('bitrate').disabled = busy;
-  $('summary').textContent = busy ? `正在处理 · 已完成 ${complete} / ${items.length}` : items.length ? [complete && `完成 ${complete}`, failed && `失败 ${failed}`, pending && `待处理 ${pending}`].filter(Boolean).join(' · ') : '等待选择文件';
-  $('substatus').textContent = complete ? '请点击文件旁的下载按钮，关闭页面前保存结果。' : '转换完成后，文件仅保留在当前页面。';
   const rows = items.map(item => {
     const row = textElement('li', 'queueItem', ''); row.dataset.id = item.id;
     const icon = textElement('span', 'fileIcon', '♪'); icon.setAttribute('aria-hidden', 'true'); row.append(icon);
     const content = textElement('div', 'fileContent', '');
     content.append(textElement('p', 'fileName', item.file.name));
     const meta = textElement('p', 'fileMeta', size(item.file.size));
-    meta.append(textElement('span', 'fileStatus', item.label)); content.append(meta);
+    const status = textElement('span', 'fileStatus', item.label);
+    status.setAttribute('role', 'status');
+    meta.append(status); content.append(meta);
     if (item.state === 'working') {
       const progress = textElement('div', 'fileProgress', '');
       const fill = document.createElement('span'); fill.style.width = `${item.progress == null ? 18 : Math.round(item.progress * 100)}%`; progress.append(fill); content.append(progress);
@@ -118,48 +101,40 @@ async function decrypt(file, signal, progress) {
     if (signal.aborted) abort(); else worker.postMessage({ bytes, name: file.name }, [bytes]);
   });
 }
-function saveResult(item, bytes, extension, name) {
+function saveResult(item, bytes, name) {
   const stored = items.reduce((sum, i) => sum + (i === item ? 0 : (i.outputSize || 0)), 0);
   if (stored + bytes.byteLength > MAX_TOTAL) return false;
   if (item.url) URL.revokeObjectURL(item.url);
-  item.url = URL.createObjectURL(new Blob([bytes], { type: mime[extension] || 'application/octet-stream' }));
-  item.extension = extension; item.outputSize = bytes.byteLength;
+  item.url = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
+  item.extension = '.mp3'; item.outputSize = bytes.byteLength;
   const baseName = name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_') || '音频';
-  let outputName = baseName + extension, suffix = 2;
-  while (items.some(i => i !== item && i.outputName === outputName)) outputName = `${baseName} (${suffix++})${extension}`;
+  let outputName = baseName + '.mp3', suffix = 2;
+  while (items.some(i => i !== item && i.outputName === outputName)) outputName = `${baseName} (${suffix++}).mp3`;
   item.outputName = outputName;
   return true;
 }
 async function start() {
   if (busy || !items.some(i => i.state === 'pending')) return;
   busy = true; controller = new AbortController(); const signal = controller.signal;
-  const format = $('format').value, bitrate = $('bitrate').value;
   notice(''); render();
   try {
     for (;;) {
       if (signal.aborted) break;
       const item = items.find(i => i.state === 'pending'); if (!item) break;
       item.state = 'working'; item.label = '读取文件'; item.progress = 0; item.error = ''; render();
-      let decoded;
       try {
-        decoded = await decrypt(item.file, signal, p => updateProgress(item, '读取与解密', p));
+        const decoded = await decrypt(item.file, signal, p => updateProgress(item, '读取与解密', p));
         signal.throwIfAborted();
-        let bytes = decoded.data, extension = decoded.extension;
-        if (format === 'mp3') {
-          updateProgress(item, '加载转换组件', null);
-          const { transcode } = await abortable(import('./transcode.js'), signal, { timeoutMs: 30000 });
-          bytes = await transcode(bytes, extension, bitrate, (label, p) => updateProgress(item, label, p), signal, Math.min(MAX_FILE, MAX_TOTAL - items.reduce((sum, i) => sum + (i.outputSize || 0), 0)));
-          extension = '.mp3';
-        }
+        updateProgress(item, '加载转换组件', null);
+        const { transcode } = await abortable(import('./transcode.js'), signal, { timeoutMs: 30000 });
+        const bytes = await transcode(decoded.data, decoded.extension, (label, p) => updateProgress(item, label, p), signal, Math.min(MAX_FILE, MAX_TOTAL - items.reduce((sum, i) => sum + (i.outputSize || 0), 0)));
         signal.throwIfAborted();
-        if (!saveResult(item, bytes, extension, decoded.name)) throw new Error('结果总量超过 200 MB，请移除已下载项后重试。');
-        item.state = 'done'; item.label = `完成 · ${extension.slice(1).toUpperCase()} · ${size(bytes.length)}`;
+        if (!saveResult(item, bytes, decoded.name)) throw new Error('结果总量超过 200 MB，请移除已下载项后重试。');
+        item.state = 'done'; item.label = `完成 · MP3 · ${size(bytes.length)}`;
       } catch (error) {
         if (signal.aborted) { item.state = 'pending'; item.label = '已停止 · 可继续'; break; }
-        const retained = decoded && saveResult(item, decoded.data, decoded.extension, decoded.name);
-        item.state = 'error'; item.label = retained ? 'MP3 未完成 · 可下载原格式' : '未完成'; item.code = error.code;
-        item.error = /[\u4e00-\u9fff]/.test(error.message || '') ? error.message : '转换组件加载失败，请检查网络后重试。原格式可直接下载。';
-        if (decoded && !retained) item.error += ' 结果总量已达限制，请移除已下载项后重试。';
+        item.state = 'error'; item.label = '未完成'; item.code = error.code;
+        item.error = /[\u4e00-\u9fff]/.test(error.message || '') ? error.message : '转换失败，请重试或使用最新版 Chrome / Edge。';
         if (error.hint && !item.error.includes(error.hint)) item.error += ` ${error.hint}`;
       }
       render();

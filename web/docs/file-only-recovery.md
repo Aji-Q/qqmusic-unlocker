@@ -2,6 +2,8 @@
 
 2026-10-14。此功能只读取用户选择的音乐文件，不读取 QQ 音乐目录、客户端缓存、账号或额外密钥库。Vercel 只提供静态资源。成功输出需要通过完整文件验证，不能仅凭扩展名判断支持情况。
 
+WEB 1.2 起，网页统一下载 320 kbps MP3。本文的原始 Ogg 校验指转码前的内部恢复阶段，不是可选的下载格式。
+
 ## 为什么这次能做到
 
 检查现有项目后，MusicKey 1.0.0 的 MusicEx 分支仍要求外部 EKey；旧 Unlock Music 的 MGG mask 推测也无法处理此次样本。继续研究公开 QMC2 实现发现，RC4 分段会重复初始化同一状态，只改变开头跳过的字节数。这提供了从文件内重复结构恢复信息的机会。
@@ -36,7 +38,7 @@
 
 密钥恢复与旧解密路径共 43 项自动测试通过，包含零 seed、浮点边界、稀疏观测、错误流、超时和原始 CRC 损坏。10 个公开编码模板可从合成正弦波逐字节重现。
 
-全新浏览器会话中，Chrome 的原格式与 MP3 下载、Playwright WebKit 的原格式下载均通过整曲解码。原格式 SHA-256 一致，停止后重新开始也成功。测试阻断了所有外部请求及非 GET / HEAD 请求，未发生音频上传或账号请求。旧 QTag、普通音频、失败后继续处理与四种窗口尺寸的回归验收同时通过。
+WEB 1.1 的全新浏览器会话中，Chrome 的原格式与 MP3 下载、Playwright WebKit 的原格式下载均通过整曲解码。原格式 SHA-256 一致，停止后重新开始也成功。测试阻断了所有外部请求及非 GET / HEAD 请求，未发生音频上传或账号请求。旧 QTag、普通音频、失败后继续处理与四种窗口尺寸的回归验收同时通过。
 
 ```bash
 cd web
@@ -47,7 +49,7 @@ npm run build
 python tests/generate_file_only_fixtures.py --help
 
 # 浏览器验收只把 INPUT.mgg 交给网页；SHA256 仅在下载后比较。
-python tests/file_only_browser.py http://127.0.0.1:4173 INPUT.mgg OUTPUT_DIR EXPECTED_OGG_SHA256
+python tests/file_only_browser.py http://127.0.0.1:4173 INPUT.mgg OUTPUT_DIR EXPECTED_MP3_SHA256
 ```
 
 生成合成夹具时会产生独立的 oracle 和测试密钥，恢复进程不能读取它们。恢复结束后再比较输出 SHA-256。WebKit 自动化结果不等同于 Safari 或 iOS 实机测试。
