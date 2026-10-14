@@ -7,6 +7,8 @@ const $ = (id) => document.getElementById(id);
 
 let lastVersion = -1;
 let HOME = '';
+let engine = null;
+let notifiedRun = false;      // 一次转换只弹一次「已完成」
 const rowNodes = new Map();
 
 async function api(path, body) {
@@ -41,15 +43,16 @@ function shortPath(p) {
   return p;
 }
 
-const FOOTER_LABEL = { musicex: 'musicex', QTag: 'QTag', V1: 'V1', unknown: '未知' };
+const FOOTER_LABEL = { musicex: 'musicex', QTag: 'QTag', V1: 'V1' };
 const STATUS_CLASS = { '等待': 'wait', '进行中': 'run', '完成': 'ok', '失败': 'err' };
+
+// ------------------------------------------------------------------ 队列渲染
 
 function buildRow(item) {
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td class="fname"><b></b><small></small></td>
     <td class="c-size"></td>
-    <td class="c-footer"></td>
     <td class="c-status"></td>
     <td class="w30"></td>`;
   tr.querySelector('b').textContent = item.name;
@@ -60,12 +63,11 @@ function buildRow(item) {
 }
 
 function updateRow(tr, item) {
-  tr.querySelector('.c-footer').innerHTML = item.footer
-    ? `<span class="badge">${FOOTER_LABEL[item.footer] || item.footer}</span>` : '—';
-
-  const cell = tr.querySelector('.c-status');
   const cls = STATUS_CLASS[item.status] || 'wait';
-  cell.innerHTML = `<span class="badge ${cls}">${item.status}</span>`;
+  const tag = item.footer && FOOTER_LABEL[item.footer];
+  tr.querySelector('.c-status').innerHTML =
+    `<span class="badge ${cls}">${item.status}</span>` +
+    (tag ? `<span class="badge tail">${tag}</span>` : '');
 
   const outCell = tr.querySelector('.w30');
   if (item.status === '进行中') {
@@ -74,13 +76,13 @@ function updateRow(tr, item) {
       <span class="miniText">${item.detail || '处理中'} · ${Math.round(item.progress || 0)}%</span>`;
   } else if (item.status === '完成' && item.result) {
     const r = item.result;
-    outCell.innerHTML = `<a class="outLink" href="#" data-reveal="${r.mp3}">打开所在位置</a>
+    outCell.innerHTML = `<a class="outLink" href="#" data-reveal-file="${r.mp3}">打开所在位置</a>
       <span class="miniText">${r.codec} ${Math.round(r.src_bitrate / 1000)}k ·
-      ${fmtTime(r.duration)} · ${human(r.size)} → MP3</span>`;
+      ${fmtTime(r.duration)} · ${human(r.size)} MP3</span>`;
   } else if (item.status === '失败') {
     outCell.innerHTML = `<span class="errText">${item.error || '失败'}</span>`;
   } else {
-    outCell.textContent = '—';
+    outCell.textContent = '等待开始';
   }
 }
 
@@ -96,8 +98,8 @@ function renderItems(items) {
   for (const [path, tr] of rowNodes) {
     if (!seen.has(path)) { tr.remove(); rowNodes.delete(path); }
   }
-  $('queueEmpty').style.display = items.length ? 'none' : 'block';
-  $('queueCount').textContent = items.length ? `${items.length} 个文件` : '';
+  $('queueCard').hidden = items.length === 0;
+  $('queueCount').textContent = items.length ? `${items.length} 个` : '';
 }
 
 function renderLogs(logs) {
@@ -114,16 +116,26 @@ function renderLogs(logs) {
   }
 }
 
+// ------------------------------------------------------------------ 状态渲染
+
 function renderProgress(state) {
   const s = state.stats;
-  const donePct = s.total ? (s.done + s.failed) / s.total : 0;
   const cur = state.items.find((i) => i.status === '进行中');
+  const donePct = s.total ? (s.done + s.failed) / s.total : 0;
   const frac = cur ? (cur.progress || 0) / 100 : 0;
   const pct = s.total ? (donePct + (cur ? frac / s.total : 0)) * 100 : 0;
   $('progFill').style.width = `${Math.min(pct, 100).toFixed(1)}%`;
-  $('progText').textContent = state.running
-    ? `${s.done + s.failed}/${s.total} · ${cur ? (cur.detail || '处理中') : '准备中'}`
-    : (s.total ? `空闲 · 已完成 ${s.done}${s.failed ? ` · 失败 ${s.failed}` : ''}` : '空闲');
+
+  if (state.running) {
+    $('progText').textContent =
+      `正在转换 ${s.done + s.failed + (cur ? 1 : 0)}/${s.total} · ${cur ? (cur.detail || '处理中') : '准备中'}`;
+  } else if (s.total) {
+    const parts = [`已完成 ${s.done}`];
+    if (s.failed) parts.push(`失败 ${s.failed}`);
+    $('progText').textContent = parts.join(' · ');
+  } else {
+    $('progText').textContent = '等待文件';
+  }
   $('btnStart').disabled = state.running || !s.total;
   $('btnStop').disabled = !state.running;
 }
@@ -132,6 +144,56 @@ function renderSettings(state) {
   if (document.activeElement !== $('outdir')) $('outdir').value = state.outdir;
   if (document.activeElement !== $('bitrate')) $('bitrate').value = state.bitrate;
   if (document.activeElement !== $('keepOgg')) $('keepOgg').checked = !!state.keep_ogg;
+  $('btnOpenOut').title = state.outdir;
+}
+
+/** 完成/失败结果条：明确告诉用户文件去哪了 */
+function renderResult(state) {
+  const s = state.stats;
+  const bar = $('resultBar');
+  if (!s.total || (!s.done && !s.failed) || state.running) {
+    bar.hidden = true;
+    notifiedRun = false;
+    return;
+  }
+  bar.hidden = false;
+  bar.classList.toggle('hasError', s.failed > 0 && s.done === 0);
+
+  const done = state.items.filter((i) => i.status === '完成');
+  const bytes = done.reduce((sum, i) => sum + ((i.result && i.result.size) || 0), 0);
+  const out = state.outdir;
+
+  if (s.failed === 0) {
+    $('resultTitle').textContent = `转换完成：${s.done} 个文件`;
+    $('resultSub').innerHTML = `已保存到 <b>${out}</b>（共 ${human(bytes)}）`;
+  } else if (s.done === 0) {
+    $('resultTitle').textContent = `${s.failed} 个文件转换失败`;
+    const first = state.items.find((i) => i.status === '失败');
+    $('resultSub').textContent = (first && first.error) || '看日志了解详情';
+  } else {
+    $('resultTitle').textContent = `完成 ${s.done} 个，失败 ${s.failed} 个`;
+    $('resultSub').innerHTML = `完成的已保存到 <b>${out}</b>；失败项见日志`;
+  }
+
+  if (!notifiedRun) {
+    notifiedRun = true;
+    if (s.failed === 0) notifyDone(s.done, out);
+  }
+}
+
+/** 原生窗口里也能看到的完成提示（浏览器里退化为通知） */
+function notifyDone(count, outdir) {
+  const title = 'QQ 音乐解锁器';
+  const body = `${count} 个文件已转好，保存在 ${outdir}`;
+  try {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.notify) {
+      window.pywebview.api.notify(title, body);
+      return;
+    }
+    if (window.Notification && Notification.permission === 'granted') {
+      new Notification(title, { body });
+    }
+  } catch (e) { /* 提示失败不影响主流程 */ }
 }
 
 async function poll() {
@@ -144,26 +206,78 @@ async function poll() {
     }
     renderProgress(state);
     renderSettings(state);
+    renderResult(state);
   } catch (err) {
     $('progText').textContent = `与服务失联：${err.message}`;
   }
 }
 
+// ------------------------------------------------------------------ 登录态排障
+
 async function loadStatus() {
-  const { engine, defaults } = await api('/api/status');
-  HOME = defaults.home || '';
+  const data = await api('/api/status');
+  engine = data.engine;
+  HOME = (data.defaults && data.defaults.home) || '';
+
   const ff = $('pillFfmpeg');
-  ff.textContent = engine.ffmpeg ? 'ffmpeg 就绪' : '缺少 ffmpeg';
+  ff.textContent = engine.ffmpeg ? '就绪' : '缺少 ffmpeg';
   ff.className = `pill ${engine.ffmpeg ? 'ok' : 'bad'}`;
+
   const acc = $('pillAccount');
-  acc.textContent = engine.credentials
-    ? `已登录 ${engine.account}${engine.login_type === '3' ? '（微信）' : '（QQ）'}`
-    : (engine.error || '未检测到登录');
-  acc.className = `pill ${engine.credentials ? 'ok' : 'bad'}`;
-  acc.title = engine.error || `凭据文件：${engine.cache_dir}`;
+  if (engine.credentials) {
+    acc.textContent = `已登录 ${engine.account}`;
+    acc.className = 'pill ok';
+    acc.title = '点一下查看登录信息来源';
+  } else {
+    acc.textContent = '需要登录 QQ 音乐';
+    acc.className = 'pill bad link';
+    acc.title = '点一下看怎么处理';
+  }
 }
 
-// ---------------- 拖拽（Chrome/Edge 可拿到真实路径） ----------------
+function openHelp() {
+  const e = engine || {};
+  const help = e.help;
+  const box = $('helpBody');
+  const rows = [];
+
+  if (e.credentials) {
+    $('helpTitle').textContent = '登录信息读取正常';
+    rows.push(`<p class="muted">当前账号：<b>${e.account}</b>（只从本机配置文件读取）</p>`);
+  } else {
+    $('helpTitle').textContent = '需要先登录 QQ 音乐客户端';
+    rows.push(`<p class="muted">本工具不猜密钥：它用你自己账号的登录信息向 QQ 音乐换取解密密钥，
+      所以必须先登录客户端。</p>`);
+  }
+
+  if (help && help.checks && help.checks.length) {
+    rows.push(`<p><b>检查结果</b>（目录：<span class="mono">${help.dir}</span>）</p><ul class="checks">`);
+    for (const c of help.checks) {
+      const where = c.path || (c.paths || []).join('、');
+      rows.push(`<li class="${c.ok ? 'ok' : 'bad'}">${c.ok ? '✓' : '✗'} ${c.name}
+        <span class="mono muted">${where}</span></li>`);
+    }
+    rows.push('</ul>');
+  } else if (e.error) {
+    rows.push(`<p class="errText">${e.error}</p>`);
+  }
+
+  if (help && help.steps && !e.credentials) {
+    rows.push('<p><b>照这个顺序处理</b></p><ol class="steps">');
+    for (const s of help.steps) rows.push(`<li>${s}</li>`);
+    rows.push('</ol>');
+  }
+
+  if (help && help.note) rows.push(`<p class="muted">${help.note}</p>`);
+  rows.push(`<p class="muted">平台：${e.platform || '-'}；ffmpeg：
+    ${e.ffmpeg ? '就绪' : '缺失'}；本机曲库标签：${e.db ? '可用' : '不可用（改用文件名）'}</p>`);
+
+  box.innerHTML = rows.join('');
+  $('helpModal').hidden = false;
+}
+
+// ------------------------------------------------------------------ 拖拽
+
 function wireDrop() {
   const zone = $('dropZone');
   const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
@@ -182,28 +296,33 @@ function wireDrop() {
       if (entry && entry.path) paths.push(entry.path);
       else if (it.getAsFile) {
         const f = it.getAsFile();
-        if (f && f.path) paths.push(f.path);
+        if (f && f.pywebviewFullPath) paths.push(f.pywebviewFullPath);
+        else if (f && f.path) paths.push(f.path);
       }
     }
     if (!paths.length) {
-      for (const f of e.dataTransfer.files || []) if (f.path) paths.push(f.path);
+      for (const f of e.dataTransfer.files || []) {
+        if (f.pywebviewFullPath) paths.push(f.pywebviewFullPath);
+        else if (f.path) paths.push(f.path);
+      }
     }
     if (!paths.length) {
-      alert('浏览器没给到文件路径。请改用「选择文件」或「选择文件夹」按钮。');
+      alert('没拿到文件路径。请改用「选择文件」按钮，或把文件拖到程序图标上。');
       return;
     }
-    const { added } = await api('/api/add', { paths });
+    await api('/api/open', { paths, auto_start: true });
     lastVersion = -1;
     poll();
-    if (!added) console.log('没有新增文件');
   });
 }
+
+// ------------------------------------------------------------------ 交互接线
 
 function wire() {
   $('btnPickFiles').onclick = async () => {
     try {
       const { paths } = await api('/api/pick/files', {});
-      if (paths.length) await api('/api/add', { paths });
+      if (paths.length) await api('/api/open', { paths, auto_start: true });
       lastVersion = -1; poll();
     } catch (e) { alert(`选择文件失败：${e.message}`); }
   };
@@ -213,7 +332,7 @@ function wire() {
       const r = await api('/api/pick/folder', {});
       lastVersion = -1; poll();
       if (r.folder && !r.files.length) {
-        alert(`目录里没有受支持的加密音频：\n${r.folder}`);
+        alert(`这个目录里没有受支持的加密音频：\n${r.folder}`);
       }
     } catch (e) { alert(`选择文件夹失败：${e.message}`); }
   };
@@ -222,7 +341,7 @@ function wire() {
     const raw = prompt('粘贴文件或文件夹的完整路径（多个用换行分隔）');
     if (!raw) return;
     const paths = raw.split('\n').map((s) => s.trim()).filter(Boolean);
-    await api('/api/add', { paths });
+    await api('/api/open', { paths, auto_start: true });
     lastVersion = -1; poll();
   };
 
@@ -235,6 +354,8 @@ function wire() {
   };
 
   $('btnReveal').onclick = () => api('/api/reveal', { path: $('outdir').value });
+  $('btnOpenOut').onclick = () => api('/api/reveal', { path: $('outdir').value });
+  $('btnResultMore').onclick = () => $('drawer').classList.add('open');
   $('btnStart').onclick = async () => {
     const r = await api('/api/start', {});
     if (!r.ok) alert(r.message || '无法开始');
@@ -243,34 +364,47 @@ function wire() {
   $('btnStop').onclick = () => api('/api/stop', {});
   $('btnClearDone').onclick = async () => { await api('/api/clear', { only_finished: true }); lastVersion = -1; poll(); };
   $('btnClearAll').onclick = async () => {
-    if (!confirm('清空整个队列？')) return;
     await api('/api/clear', { only_finished: false }); lastVersion = -1; poll();
   };
-  $('btnReloadCred').onclick = async () => {
+  $('btnReloadCred').onclick = $('btnHelpRetry').onclick = async () => {
     await api('/api/credentials/reload', {});
     await loadStatus();
+    $('helpModal').hidden = true;
     poll();
+  };
+  $('btnHelpCopy').onclick = async () => {
+    const text = JSON.stringify(engine || {}, null, 2);
+    try { await navigator.clipboard.writeText(text); $('btnHelpCopy').textContent = '已复制'; }
+    catch (e) { prompt('复制下面内容：', text); }
   };
 
   $('outdir').onchange = () => api('/api/config', { outdir: $('outdir').value }).then(() => { lastVersion = -1; poll(); });
   $('bitrate').onchange = () => api('/api/config', { bitrate: $('bitrate').value });
   $('keepOgg').onchange = () => api('/api/config', { keep_ogg: $('keepOgg').checked });
 
+  $('btnToggleSettings').onclick = () => {
+    const body = $('settingsBody');
+    body.hidden = !body.hidden;
+    $('btnToggleSettings').textContent = body.hidden ? '展开' : '收起';
+  };
   $('btnLog').onclick = () => $('drawer').classList.toggle('open');
   $('btnCloseLog').onclick = () => $('drawer').classList.remove('open');
+  $('btnCloseHelp').onclick = () => { $('helpModal').hidden = true; };
+  $('pillAccount').onclick = openHelp;
+  $('helpModal').onclick = (e) => { if (e.target === $('helpModal')) $('helpModal').hidden = true; };
+
   $('btnQuit').onclick = async () => {
-    if (!confirm('关闭 QQ 音乐解锁器后台服务？\n（已转换好的文件不受影响）')) return;
     try { await api('/api/quit', {}); } catch (e) { /* 进程已退出 */ }
     document.body.innerHTML = `<main><section class="card" style="margin-top:80px;text-align:center">
-      <h2 style="margin-bottom:8px">服务已关闭</h2>
-      <p class="muted">可以直接关掉这个标签页；下次双击「QQ音乐解锁器」再次启动。</p></section></main>`;
+      <h2 style="margin-bottom:8px">已退出</h2>
+      <p class="muted">可以直接关掉这个页面；下次双击「QQ音乐解锁器」再次打开。</p></section></main>`;
   };
 
   document.addEventListener('click', (e) => {
-    const a = e.target.closest('[data-reveal]');
+    const a = e.target.closest('[data-reveal-file]');
     if (a) {
       e.preventDefault();
-      api('/api/reveal', { path: a.dataset.reveal });
+      api('/api/reveal', { path: a.dataset.revealFile });
     }
   });
 

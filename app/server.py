@@ -385,10 +385,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 return self._json({"error": str(exc)}, 500)
         if path == "/api/open":
-            # 供「把文件拖到应用图标上」的 Finder 集成调用
+            # 「拖到图标/窗口上」的统一入口：加进队列，默认直接开跑（少点一次按钮）
             paths = [p for p in (payload.get("paths") or [])
                      if os.path.isfile(p)]
-            return self._json({"added": self.jobs.add(paths)})
+            added = self.jobs.add(paths)
+            started = False
+            if added and payload.get("auto_start", True):
+                started, _ = self.jobs.start()
+            return self._json({"added": added, "started": started})
         if path == "/api/start":
             ok, msg = self.jobs.start()
             return self._json({"ok": ok, "message": msg})

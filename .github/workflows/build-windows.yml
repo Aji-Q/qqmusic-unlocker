@@ -5,7 +5,6 @@ on:
   workflow_dispatch:
   push:
     tags: ["v*"]
-
 permissions:
   contents: write          # 打标签时创建 Release 需要
 
@@ -82,11 +81,15 @@ jobs:
           FFmpeg 项目：https://ffmpeg.org/   源码：https://github.com/FFmpeg/FFmpeg
           "@ | Set-Content -Encoding utf8 "$dst\LICENSES\FFMPEG.txt"
           if (Test-Path README.md) { Copy-Item README.md "$dst\README.md" }
+          # 使用辅助脚本：拖文件到 bat 上转换 / 一键建桌面快捷方式
+          Copy-Item win\Convert-dropped-files.bat $dst -Force
+          Copy-Item "win\创建桌面快捷方式.ps1" $dst -Force
           $zip = "QQ音乐解锁器-windows-x64.zip"
           Compress-Archive -Path "$dst\*" -DestinationPath $zip -Force
           $h = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           "$h  $zip" | Set-Content -Encoding ascii "$zip.sha256"
           "SHA256: $h"
+          Get-ChildItem $dst | Select-Object Name, Length | Format-Table
 
       - uses: actions/upload-artifact@v4
         with:

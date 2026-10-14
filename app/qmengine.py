@@ -568,13 +568,48 @@ def scan_folder(folder: str):
     return found
 
 
+def credential_help() -> dict:
+    """凭据排障：告诉用户「查了哪两个文件、哪个没读到、下一步该干什么」。
+
+    只在缺登录态时才被界面调用，所以文案要能直接照做。
+    """
+    if IS_WIN:
+        cfg = wincred.ini_path()
+        cookies = wincred.cookie_paths()
+        return {
+            "dir": wincred.qqmusic_dir(),
+            "checks": [
+                {"name": "Uin 配置文件", "path": cfg, "ok": os.path.exists(cfg)},
+                {"name": "登录 cookie", "paths": cookies,
+                 "ok": any(os.path.exists(p) for p in cookies)},
+            ],
+            "steps": [
+                "确认本机装了 QQ 音乐 PC 客户端，并且**已登录**（登录后配置文件才会写出来）",
+                "关掉本程序，重新打开一次；登录过就点界面上的「重新检测登录」",
+                "刚登录还是不行：在 QQ 音乐里随便播放一首会员歌（触发凭据落盘），再重试",
+                "本机没装 QQ 音乐客户端：装一个并登录即可，不需要开会员也能读凭据",
+            ],
+            "note": "只读取你自己账号的配置文件，不碰其它进程内存，也不修改客户端。",
+        }
+    return {
+        "dir": os.path.dirname(PLIST),
+        "checks": [{"name": "登录凭据 plist", "path": PLIST, "ok": os.path.exists(PLIST)}],
+        "steps": [
+            "打开 QQ 音乐客户端并完成登录",
+            "回到本软件，点「重新检测登录」",
+        ],
+        "note": "只读取你自己账号的 plist，不修改客户端。",
+    }
+
+
 def engine_status() -> dict:
     """软件启动时自检：ffmpeg / 凭据 / 曲库是否就绪。"""
-    st = {"ffmpeg": os.path.isfile(FFMPEG) or bool(shutil.which("ffmpeg")),
-          "ffprobe": os.path.isfile(FFPROBE) or bool(shutil.which("ffprobe")),
+    ff = os.path.isfile(FFMPEG) or bool(shutil.which("ffmpeg"))
+    ffp = os.path.isfile(FFPROBE) or bool(shutil.which("ffprobe"))
+    st = {"ffmpeg": ff, "ffprobe": ffp,
           "credentials": False, "account": None, "error": None,
           "cache_dir": CACHE_DIR, "cache_exists": os.path.isdir(CACHE_DIR),
-          "db": os.path.exists(SQLITE)}
+          "db": os.path.exists(SQLITE), "platform": "windows" if IS_WIN else "macos"}
     try:
         cred = read_credentials()
         st["credentials"] = True
@@ -582,8 +617,9 @@ def engine_status() -> dict:
         st["login_type"] = cred.login_type
     except EngineError as exc:
         st["error"] = str(exc)
-    if not st["ffmpeg"]:
-        st["error"] = ("缺少 ffmpeg" if IS_WIN else "缺少 ffmpeg，请先执行：brew install ffmpeg")
+        st["help"] = credential_help()
+    if not ff:
+        st["error"] = "缺少 ffmpeg" + ("" if IS_WIN else "，请先执行：brew install ffmpeg")
     return st
 
 
