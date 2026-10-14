@@ -44,7 +44,7 @@ class SettingsTests(IsolatedJobsTest):
         restarted = server.Jobs(eng.EkeyCache(), settings_path=str(self.config))
         self.assertEqual((restarted.outdir, restarted.bitrate, restarted.keep_ogg),
                          (output, "192k", True))
-        self.assertEqual(set(json.loads(self.config.read_text())),
+        self.assertEqual(set(json.loads(self.config.read_text(encoding="utf-8"))),
                          {"version", "outdir", "bitrate", "keep_ogg"})
 
     def test_corrupt_or_invalid_settings_fall_back_without_overwriting(self):
@@ -55,7 +55,7 @@ class SettingsTests(IsolatedJobsTest):
             self.assertEqual(restarted.bitrate, "320k")
             self.assertFalse(restarted.keep_ogg)
             self.assertTrue(restarted.settings_warning)
-            self.assertEqual(self.config.read_text(), content)
+            self.assertEqual(self.config.read_text(encoding="utf-8"), content)
 
     def test_invalid_configuration_does_not_change_current_settings(self):
         before = (self.jobs.outdir, self.jobs.bitrate, self.jobs.keep_ogg)
