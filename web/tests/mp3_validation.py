@@ -25,5 +25,3 @@ def assert_mp3_320k(path):
         offset += length
     assert offset == len(data) and audio_count > 0, (path, offset, len(data), audio_count)
     return audio_count
-
-
