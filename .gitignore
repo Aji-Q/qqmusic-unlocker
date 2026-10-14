@@ -8,3 +8,7 @@ build/
 !QQMusicUnlocker.spec
 !QQMusicService.spec
 .venv/
+node_modules/
+.vercel/
+web/public/vendor/
+web/test-results/
