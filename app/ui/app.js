@@ -365,15 +365,28 @@ async function saveSetting(id, key, value) {
   }
 }
 
+async function pick(kind) {
+  if (pickerOpen) throw new Error('请先关闭当前选择窗口。');
+  await configQueue;
+  pickerOpen = true;
+  try {
+    const bridge = window.webkit?.messageHandlers?.picker;
+    if (bridge) return await bridge.postMessage({ kind });
+    return await api(kind === 'files' ? '/api/pick/files' : '/api/pick/folder', kind === 'output' ? { outdir: true } : {});
+  } finally { pickerOpen = false; }
+}
+
 function wire() {
   action('btnPickFiles', async () => {
-    const { paths } = await api('/api/pick/files', {});
+    const { paths } = await pick('files');
     if (paths?.length) await addPaths(paths);
   });
   action('btnPickFolder', async () => {
-    await configQueue;
-    const result = await api('/api/pick/folder', {});
-    if (result.folder) handleAddResponse(result);
+    const result = await pick('folder');
+    if (result.folder) {
+      if (window.webkit?.messageHandlers?.picker) await addPaths([result.folder]);
+      else handleAddResponse(result);
+    }
     lastVersion = -1;
   });
   $('btnAddPath').onclick = () => { $('pathError').hidden = true; openModal('pathModal', 'paths'); };
@@ -391,12 +404,12 @@ function wire() {
     finally { button.disabled = false; }
   };
   action('btnPickOut', async () => {
-    await configQueue;
-    pickerOpen = true;
-    try {
-      const result = await api('/api/pick/folder', { outdir: true });
-      if (result.folder) $('settingsSaved').textContent = '已保存';
-    } finally { pickerOpen = false; lastVersion = -1; }
+    const result = await pick('output');
+    if (result.folder) {
+      if (window.webkit?.messageHandlers?.picker) await saveSetting('outdir', 'outdir', result.folder);
+      else $('settingsSaved').textContent = '已保存';
+    }
+    lastVersion = -1;
   });
   action('btnReveal', () => api('/api/reveal', { path: $('outdir').value }));
   action('btnOpenOut', () => api('/api/reveal', { path: $('btnOpenOut').dataset.path }));

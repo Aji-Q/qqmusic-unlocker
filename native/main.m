@@ -123,12 +123,13 @@ static NSDictionary *LaunchEnvironment(void)
 @property (nonatomic, weak) UnlockerDelegate *owner;
 @end
 
-@interface UnlockerDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate>
+@interface UnlockerDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandlerWithReply>
 @property (nonatomic, strong) NSTask *server;
 @property (nonatomic, strong) NSMutableArray<NSString *> *pendingFiles;
 @property (nonatomic, strong) NSWindow *window;
 @property (nonatomic, strong) DropWebView *webView;
 @property (nonatomic, strong) NSTimer *watchdog;
+@property (nonatomic, strong) NSOpenPanel *activePicker;
 @property (nonatomic) BOOL pageReady;
 - (BOOL)pushPaths:(NSArray<NSString *> *)paths;
 @end
@@ -244,6 +245,8 @@ static NSDictionary *LaunchEnvironment(void)
         if (![self.window setFrameUsingName:@"MainWindow"]) [self.window center];
 
         WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
+        [cfg.userContentController addScriptMessageHandlerWithReply:self
+                                                       contentWorld:WKContentWorld.pageWorld name:@"picker"];
         self.webView = [[DropWebView alloc] initWithFrame:frame configuration:cfg];
         self.webView.owner = self;
         self.webView.UIDelegate = self;
@@ -263,6 +266,59 @@ static NSDictionary *LaunchEnvironment(void)
     }
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+}
+
+// The picker belongs to this window, so it cannot disappear behind an osascript process.
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message
+                 replyHandler:(void (^)(id, NSString *))replyHandler
+{
+    NSDictionary *runtime = RuntimeInfo();
+    WKSecurityOrigin *origin = message.frameInfo.securityOrigin;
+    if (!runtime || !message.frameInfo.mainFrame || message.webView != self.webView ||
+        ![message.name isEqualToString:@"picker"] ||
+        ![origin.protocol isEqualToString:@"http"] || ![origin.host isEqualToString:@"127.0.0.1"] ||
+        origin.port != [runtime[@"port"] integerValue]) {
+        replyHandler(nil, @"此页面无法使用文件选择器");
+        return;
+    }
+    NSDictionary *body = [message.body isKindOfClass:NSDictionary.class] ? message.body : nil;
+    NSString *kind = [body[@"kind"] isKindOfClass:NSString.class] ? body[@"kind"] : nil;
+    if (![@[@"files", @"folder", @"output"] containsObject:kind ?: @""]) {
+        replyHandler(nil, @"未知的文件选择操作");
+        return;
+    }
+    if (!self.window || self.activePicker || self.window.attachedSheet) {
+        replyHandler(nil, @"请先关闭当前对话框，再选择文件");
+        return;
+    }
+    BOOL files = [kind isEqualToString:@"files"];
+    BOOL output = [kind isEqualToString:@"output"];
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.title = files ? @"添加文件" : (output ? @"选择输出文件夹" : @"添加文件夹");
+    panel.prompt = @"选择";
+    panel.canChooseFiles = files;
+    panel.canChooseDirectories = !files;
+    panel.allowsMultipleSelection = files;
+    panel.canCreateDirectories = output;
+    self.activePicker = panel;
+    [self.window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+    [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        self.activePicker = nil;
+        if (files) {
+            NSMutableArray<NSString *> *paths = [NSMutableArray array];
+            if (result == NSModalResponseOK) {
+                for (NSURL *url in panel.URLs) {
+                    if (url.isFileURL && url.path) [paths addObject:url.path];
+                }
+            }
+            replyHandler(@{@"paths": paths}, nil);
+        } else {
+            NSString *folder = result == NSModalResponseOK && panel.URL.isFileURL ? panel.URL.path : @"";
+            replyHandler(@{@"folder": folder ?: @""}, nil);
+        }
+    }];
 }
 
 // ---- WKUIDelegate：页面里的 alert / confirm / prompt 默认在 WKWebView 中是静默的 ----
@@ -435,6 +491,9 @@ static NSDictionary *LaunchEnvironment(void)
 
 - (void)applicationWillTerminate:(NSNotification *)notification
 {
+    [self.activePicker cancel:nil];
+    [self.webView.configuration.userContentController removeScriptMessageHandlerForName:@"picker"
+                                                                           contentWorld:WKContentWorld.pageWorld];
     AppendLog(@"应用退出，关闭本地服务");
     [self quitServer];
     if (self.server && self.server.isRunning) [self.server terminate];
