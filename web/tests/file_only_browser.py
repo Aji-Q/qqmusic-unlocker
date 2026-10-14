@@ -70,7 +70,7 @@ with sync_playwright() as pw:
             page.locator('#files').set_input_files(str(source))
             if output_format == 'original':
                 page.locator('#start').click()
-                page.wait_for_function("document.querySelector('.fileStatus')?.textContent.includes('%')", timeout=30000)
+                expect(page.locator('.fileStatus')).to_contain_text('%', timeout=30000)
                 page.locator('#cancel').click()
                 expect(page.locator('.fileStatus')).to_have_text('已停止 · 可继续')
                 expect(page.locator('#start')).to_be_enabled()
@@ -78,7 +78,7 @@ with sync_playwright() as pw:
                 expect(page.locator('.download')).to_have_count(0)
             started = time.monotonic()
             page.locator('#start').click()
-            page.wait_for_function("document.querySelector('.download') || document.querySelector('.fileError')", timeout=240000)
+            page.locator('.download, .fileError').first.wait_for(state='visible', timeout=240000)
             if page.locator('.fileError').count():
                 page.screenshot(path=str(destination / f'{browser_name}-error.png'), full_page=True)
                 raise AssertionError([page.locator('.fileError').all_text_contents(), page.evaluate('window.__workerErrors')])
