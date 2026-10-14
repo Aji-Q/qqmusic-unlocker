@@ -371,6 +371,70 @@ class Recovery {
     return matching.sort((a, b) => b.tailMatches - a.tailMatches || b.matches - a.matches);
   }
 
+  templatePositions() {
+    const parsed = this.setupPosition();
+    if (parsed !== null) return [parsed];
+    const last = BLOCK - Math.min(...vorbisTemplates().map(({ bytes }) => bytes.length));
+    const positions = [];
+    // A missing comment-length byte need not hide an otherwise recognizable
+    // public setup packet. Match the packet itself against independent bytes.
+    for (let start = 128; start <= last; start += 1) {
+      this.checkpoint();
+      if (this.templateCandidates(start).length) positions.push(start);
+    }
+    return positions;
+  }
+
+  prefixCandidates() {
+    const templates = vorbisTemplates();
+    const prefixes = [...new Map(templates.map(({ bytes }) => {
+      const prefix = bytes.subarray(0, 64);
+      return [Array.from(prefix).join(','), prefix];
+    })).values()];
+    const first = Math.max(128, this.seed.commentStart + 11 + this.seed.vendor.length + 4);
+    const last = BLOCK - Math.min(...templates.map(({ bytes }) => bytes.length));
+    const patterns = new Map();
+    let patternCount = 0;
+    for (let start = first; start <= last; start += 1) {
+      this.checkpoint();
+      for (const prefix of prefixes) {
+        const stream = Uint8Array.from(prefix, (plain, i) => this.cipher[start + i] ^ plain);
+        if (stream.some((value, i) => this.known.has(start + i) && this.known.get(start + i) !== value)) continue;
+        for (let j = 0; j + 27 < stream.length; j += 1) {
+          if (++patternCount > 500_000) fail('文件结构过于复杂，无法完成分析');
+          const needle = five(...MAGIC.map((plain, i) => plain ^ stream[j + i]));
+          const options = patterns.get(needle) ?? [];
+          options.push({ start, stream, j });
+          patterns.set(needle, options);
+        }
+      }
+    }
+    const found = new Map();
+    let matches = 0;
+    for (let segment = 1; segment * BLOCK < this.cipher.length; segment += 1) {
+      this.checkpoint();
+      const end = Math.min(BLOCK - 27, last + 64 + 511, this.cipher.length - segment * BLOCK - 27);
+      for (let remainder = 0; remainder <= end; remainder += 1) {
+        const off = segment * BLOCK + remainder; const c = this.cipher;
+        const options = patterns.get(five(c[off], c[off + 1], c[off + 2], c[off + 3], c[off + 4]));
+        if (!options) continue;
+        for (const { start, stream, j } of options) {
+          if (++matches > 100_000) fail('文件结构过于复杂，无法完成分析');
+          const delta = start + j - remainder;
+          if (Math.abs(delta) > 511 || Math.max(this.high, delta) - Math.min(this.low, delta) > 511) continue;
+          if (!this.fixed.every(([i, plain]) => (c[off + i] ^ stream[j + i]) === plain)
+              || (c[off + 5] ^ stream[j + 5]) > 7) continue;
+          const id = `${start}:${Array.from(stream).join(',')}`;
+          const candidate = found.get(id) ?? { start, stream, anchors: [] };
+          candidate.anchors.push({ offset: off, segment, delta });
+          found.set(id, candidate);
+          if (found.size > 16) fail('文件结构存在歧义，无法安全转换');
+        }
+      }
+    }
+    return [...found.values()];
+  }
+
   crcEvidence() {
     let valid = 0; let invalid = 0;
     const segments = new Set();
@@ -422,7 +486,10 @@ export function recoverOggStream(ciphertext, onProgress = () => {}) {
         const evidence = candidate.crcEvidence();
         // This selects a public-template hypothesis only. The caller still
         // reconstructs the key and checks EVERY original CRC before acceptance.
-        if (evidence.invalid || evidence.valid < 1) continue;
+        // Some valid short files have an unknown stream byte on every page.
+        // Do not require a complete page here: key/PRGA reconstruction and the
+        // caller's full original-CRC validation remain mandatory afterwards.
+        if (evidence.invalid) continue;
         if (accepted) {
           if ([...candidate.known].every(([j, value]) => !accepted.known.has(j) || accepted.known.get(j) === value)) continue;
           fail('文件结构存在歧义，无法安全转换', 'invalid_data');
@@ -439,7 +506,23 @@ export function recoverOggStream(ciphertext, onProgress = () => {}) {
       const state = new Recovery(ciphertext, seed, checkpoint);
       state.iterate((round) => progress(Math.min(0.48, 0.08 + round * 0.025)));
       if (state.pages.size < 8 || state.known.size < 48 || state.serial.some((v) => v === null)) continue;
-      tryTemplates(state, state.setupPosition());
+      const before = accepted;
+      for (const start of state.templatePositions()) tryTemplates(state, start);
+      if (accepted === before) {
+        // If the setup lies entirely in an unknown stream region, jointly
+        // locate its public prefix and independent later Ogg page headers.
+        for (const { start, stream, anchors } of state.prefixCandidates()) {
+          try {
+            const candidate = state.clone();
+            stream.forEach((value, i) => candidate.addKnown(start + i, value));
+            for (const anchor of anchors) candidate.addPage(anchor.offset, anchor.segment, anchor.delta);
+            candidate.iterate(() => {});
+            tryTemplates(candidate, start);
+          } catch (error) {
+            if (error.code !== 'file_only_unsupported') throw error;
+          }
+        }
+      }
 
     } catch (error) {
       if (error.code === 'recovery_timeout') throw error;

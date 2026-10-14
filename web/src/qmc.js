@@ -1,4 +1,4 @@
-/** Local QMC2 decryption, including verified file-only recovery for compatible MGG. */
+/** Local QMC2 decryption, including verified file-only MGG / MFLAC recovery. */
 
 const DELTA = 0x9e3779b9;
 const MAX_KEY_BYTES = 16 * 1024;
@@ -290,21 +290,28 @@ export async function decryptFile(file, onProgress = () => {}) {
     }
     throw error;
   }
-  if (footer.recoverFromFile && footer.bodyEnd < 1537 * 5120) {
+  if (footer.recoverFromFile && footer.bodyEnd < 1025 * 5120) {
     fail('file_only_unsupported', '暂时无法仅凭此文件转换', '文件较短，不满足当前恢复条件。');
   }
   if (footer.recoverFromFile && footer.bodyEnd > 100 * 1024 * 1024) {
     fail('file_too_large', '文件超过 100 MB 上限');
   }
-  const data = await readBytes(file, 0, footer.bodyEnd);
+  let data = await readBytes(file, 0, footer.bodyEnd);
   let verify;
   if (footer.recoverFromFile) {
-    const [{ recoverOggStream }, { recoverFileKey, verifyRecoveredOgg }] = await Promise.all([
-      import('./file-only-stream.js'), import('./file-only-key.js'),
-    ]);
-    const observations = await recoverOggStream(data, value => onProgress(value * 0.7));
-    footer.key = recoverFileKey(observations, value => onProgress(0.7 + value * 0.15));
-    verify = verifyRecoveredOgg;
+    const { recoverFlacKey } = await import('./file-only-flac.js');
+    footer.key = recoverFlacKey(data, value => onProgress(value * 0.85));
+    if (footer.key) {
+      const { verifyRecoveredFlac } = await import('./file-only-flac-verify.js');
+      verify = verifyRecoveredFlac;
+    } else {
+      const [{ recoverOggStream }, { recoverFileKey, verifyRecoveredOgg }] = await Promise.all([
+        import('./file-only-stream.js'), import('./file-only-key.js'),
+      ]);
+      const observations = await recoverOggStream(data, value => onProgress(value * 0.7));
+      footer.key = recoverFileKey(observations, value => onProgress(0.7 + value * 0.15));
+      verify = verifyRecoveredOgg;
+    }
   }
   const cipher = makeCipher(footer.key);
   for (let offset = 0; offset < data.length; offset += CHUNK_SIZE) {
@@ -316,7 +323,10 @@ export async function decryptFile(file, onProgress = () => {}) {
     onProgress(footer.recoverFromFile ? 0.85 + end / data.length * 0.14 : end / data.length);
     if (end < data.length) await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  if (verify) verify(data);
+  if (verify) {
+    const verified = verify(data);
+    if (verified instanceof Uint8Array) data = verified;
+  }
   onProgress(1);
   return { data, extension: audioExtension(data.subarray(0, 32)), name, decrypted: true };
 }

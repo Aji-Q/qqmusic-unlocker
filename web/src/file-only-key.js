@@ -14,6 +14,17 @@ function skip(hash, segment, seed) {
   return seed ? Math.trunc((hash / ((segment + 1) * seed)) * 100) & 511 : 0;
 }
 
+function hasMatchingSeed(hash, observations) {
+  for (let seed = 0; seed < 256; seed += 1) {
+    let matches = true;
+    for (const [segment, value] of observations) {
+      if (skip(hash, segment, seed) !== value) { matches = false; break; }
+    }
+    if (matches) return true;
+  }
+  return false;
+}
+
 function matchingSeeds(hash, observations) {
   const choices = [];
   for (let seed = 0; seed < 256; seed += 1) {
@@ -57,18 +68,72 @@ function streamMatches(key, known, reference) {
   return compared >= 128;
 }
 
-/**
- * Solve the public skip formula using each seed's observations 512 segments apart.
- * The recovered key must regenerate the original hash and independently inferred
- * stream. A matching file header alone never accepts a candidate.
- */
-export function recoverFileKey({ known, shifts }, onProgress = () => {}) {
-  if (!(known instanceof Map) || !(shifts instanceof Map) || known.size < 128
-      || known.size > 5631 || shifts.size > MAX_SEGMENTS) unsupported();
+function validateKnown(known) {
+  if (!(known instanceof Map) || known.size < 128 || known.size > 5631) unsupported();
   for (const [index, value] of known) {
     if (!Number.isInteger(index) || index < -511 || index > 5630
         || !Number.isInteger(value) || value < 0 || value > 255) unsupported();
   }
+}
+
+function visitKeys({ hash, reference, choices }, known, checkBudget, accept) {
+  const combinations = choices.reduce((product, values) => product * values.length, 1);
+  if (combinations > 4096) return;
+  const key = new Uint8Array(PERIOD);
+  const visit = (index) => {
+    if (index === PERIOD) {
+      checkBudget();
+      if (keyHash(key) === hash && streamMatches(key, known, reference)) accept(key.slice());
+      return;
+    }
+    for (const value of choices[index]) {
+      key[index] = value;
+      visit(index + 1);
+    }
+  };
+  visit(0);
+}
+
+/** Recover a key from CRC-narrowed candidates; every byte must match the stream. */
+export function recoverKeyFromCandidates({ known, candidates }, onProgress = () => {}) {
+  validateKnown(known);
+  if (!Array.isArray(candidates) || !candidates.length || candidates.length > 64) unsupported();
+  const deadline = performance.now() + 30_000;
+  let tested = 0;
+  const recovered = [];
+  for (const [index, candidate] of candidates.entries()) {
+    if (!candidate || !Number.isInteger(candidate.hash) || candidate.hash < 1 || candidate.hash > MAX_HASH
+        || !Number.isInteger(candidate.reference) || candidate.reference < 0 || candidate.reference > 511
+        || !Array.isArray(candidate.choices) || candidate.choices.length !== PERIOD
+        || candidate.choices.some(values => !Array.isArray(values) || !values.length || values.length > 256
+          || new Set(values).size !== values.length
+          || values.some(value => !Number.isInteger(value) || value < 0 || value > 255))) unsupported();
+    visitKeys(candidate, known, () => {
+      tested += 1;
+      if (tested > 4096 || performance.now() > deadline) unsupported();
+    }, key => {
+      if (!recovered.some(previous => previous.every((value, i) => value === key[i]))) recovered.push(key);
+    });
+    if (recovered.length > 1 || performance.now() > deadline) unsupported();
+    onProgress((index + 1) / candidates.length);
+  }
+  if (recovered.length !== 1) unsupported();
+  return recovered[0];
+}
+
+/** Return bounded hash/seed candidates for formats whose CRCs narrow missing groups. */
+export function recoverHashCandidates(observations, onProgress = () => {}) {
+  return solveObservations(observations, onProgress, true);
+}
+
+/** Recover a QMC2 key only when its hash and independently inferred stream agree. */
+export function recoverFileKey(observations, onProgress = () => {}) {
+  return solveObservations(observations, onProgress, false);
+}
+
+function solveObservations({ known, shifts }, onProgress, partial) {
+  validateKnown(known);
+  if (!(shifts instanceof Map) || shifts.size > MAX_SEGMENTS) unsupported();
   for (const [segment, delta] of shifts) {
     if (!Number.isInteger(segment) || segment < 0 || segment >= MAX_SEGMENTS
         || !Number.isInteger(delta) || Math.abs(delta) > 511
@@ -79,7 +144,7 @@ export function recoverFileKey({ known, shifts }, onProgress = () => {}) {
   let hashTests = 0;
   let keyTests = 0;
   const checkBudget = () => {
-    if (performance.now() > deadline || tCandidates > 30_000_000
+    if (performance.now() > deadline || tCandidates > 60_000_000
         || hashTests > 2_000_000 || keyTests > 4096) unsupported();
   };
   const deltas = [...shifts.values(), 0];
@@ -104,11 +169,13 @@ export function recoverFileKey({ known, shifts }, onProgress = () => {}) {
       groups[segment & 511].push([segment, value]);
     }
     for (const group of groups) group.sort((a, b) => a[0] - b[0]);
-    if (groups.some(group => group.length < 1)) unsupported();
-    // A zero seed gives no hash information. Use another early residue group
-    // with four observations, rather than assuming key[0] must be nonzero.
-    const anchor = groups.findIndex(group => group.length >= 4 && group[0][0] <= 7
-      && group.some(([, value]) => value !== 0));
+    if (!partial && groups.some(group => group.length < 1)) unsupported();
+    // Three repeats suffice when other seed groups reject hash aliases early.
+    // Prefer the most observations, and skip zero seeds that reveal no hash.
+    const anchor = groups.map((group, index) => ({ group, index }))
+      .filter(({ group }) => group.length >= 3 && group[0][0] <= 7
+        && group.some(([, value]) => value !== 0))
+      .sort((a, b) => b.group.length - a.group.length || a.index - b.index)[0]?.index ?? -1;
     if (anchor < 0) unsupported();
     const first = groups[anchor];
     const enumerateHashes = (tolerance) => {
@@ -148,7 +215,11 @@ export function recoverFileKey({ known, shifts }, onProgress = () => {}) {
                     hashTests += 1;
                     // The interval search only supplies candidates. Acceptance
                     // always uses the original IEEE-double skip formula.
-                    if (first.every(([segment, value]) => skip(hash, segment, seed) === value)) hashes.add(hash);
+                    // With only three repeats the anchor alone can produce
+                    // too many aliases. Reject against independent seed groups
+                    // before retaining candidates; original float checks remain.
+                    if (first.every(([segment, value]) => skip(hash, segment, seed) === value)
+                        && earlyGroups.every(({ observations }) => hasMatchingSeed(hash, observations))) hashes.add(hash);
                   }
                 }
               }
@@ -168,6 +239,7 @@ export function recoverFileKey({ known, shifts }, onProgress = () => {}) {
     const groupOrder = groups.map((observations, index) => ({ observations, index }))
       .filter(group => group.index !== anchor)
       .sort((a, b) => b.observations.length - a.observations.length);
+    const earlyGroups = groupOrder.slice(0, 2);
     const countBefore = recovered.length;
     const testedHashes = new Set();
     // Usually the exact integer search succeeds. Retry adjacent rational
@@ -184,30 +256,23 @@ export function recoverFileKey({ known, shifts }, onProgress = () => {}) {
         testedHashes.add(hash);
         const choices = groups.map(observations => matchingSeeds(hash, observations));
         if (choices.some(values => values.length === 0)) continue;
-        const combinations = choices.reduce((product, values) => product * values.length, 1);
-        if (combinations > 4096) continue;
-        const key = new Uint8Array(PERIOD);
-        const visit = (index) => {
-          if (index === PERIOD) {
+        if (partial) {
+          recovered.push({ hash, reference, choices, groups: groups.map(group => group.length) });
+          if (recovered.length > 64) unsupported();
+        } else {
+          visitKeys({ hash, reference, choices }, known, () => {
             keyTests += 1;
             checkBudget();
-            if (keyHash(key) === hash && streamMatches(key, known, reference)) recovered.push(key.slice());
-            return;
-          }
-          for (const value of choices[index]) {
-            key[index] = value;
-            visit(index + 1);
-          }
-        };
-        visit(0);
+          }, key => recovered.push(key));
+        }
       }
-      if (recovered.length > countBefore) break;
+      if (!partial && recovered.length > countBefore) break;
     }
-    if (recovered.length > 1) unsupported();
+    if (!partial && recovered.length > 1) unsupported();
   }
-  if (recovered.length !== 1) unsupported();
+  if (!recovered.length || (!partial && recovered.length !== 1)) unsupported();
   onProgress(1);
-  return recovered[0];
+  return partial ? recovered : recovered[0];
 }
 
 const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, byte) => {

@@ -10,11 +10,11 @@
 
 无需设置输出格式或码率；结果只提供 MP3。随 QQ 音乐版本更新，部分文件可能失效；可收藏 [GitHub 仓库](https://github.com/Aji-Q/qqmusic-unlocker) 或联系 [jayqin04@gmail.com](mailto:jayqin04@gmail.com) 获取更新。
 
-QTag / V1 内嵌密钥的 QMC2 可本地解密。部分新版 `musicex` MGG 也可仅凭音乐文件恢复：从公开 Vorbis 编码结构推导重复的密码流，再利用分段偏移反推密钥。不会读取客户端缓存、请求账号或要求导入额外文件。普通 FLAC、OGG、WAV、MP3 也可转为 MP3。
+QTag / V1 内嵌密钥的 QMC2 可本地解密。部分新版 `musicex` MGG / MFLAC 也可仅凭音乐文件恢复：从公开 Vorbis 编码结构或 FLAC 的零填充与原始帧校验推导重复的密码流，再利用分段偏移反推密钥。不会读取客户端缓存、请求账号或要求导入额外文件。普通 FLAC、OGG、WAV、MP3 也可转为 MP3。
 
-新版恢复是实验性兼容路径，不代表所有 MGG 或 MFLAC 都支持。当前要求匹配公开的 Xiph Vorbis 编码结构、512 字节 QMC2 RC4 密钥、足够的 Ogg 页面和分段重复；音频体至少 7,869,440 字节。不同编码器、较短文件、稀疏分页或损坏文件可能失败。扩展名相同也不保证兼容。
+新版恢复是实验性兼容路径，不代表所有 MGG 或 MFLAC 都支持。MGG 要求可识别的公开 Xiph Vorbis 编码结构与足够的页面；MFLAC 要求跨越前两个分段的足量零填充、可识别的固定块 FLAC 帧与足够的校验约束。两者当前都针对 512 字节 QMC2 RC4 密钥，音频体至少 5,248,000 字节；达到大小下限不保证支持。不同编码器、较短文件、稀疏分页、填充不足或损坏文件可能失败。扩展名相同也不保证兼容。
 
-输出前会验证反推密钥生成的密码流，并检查整个文件的原始 CRC、页面顺序与结束标记，包括最前 128 字节。不会重建文件头、猜测采样率或修改校验和来接受结果。密钥只存在于处理文件的临时 Worker 内；完成或取消后 Worker 终止。技术过程、来源与复现方法见 [单文件恢复说明](docs/file-only-recovery.md)。
+输出前会验证反推密钥生成的密码流，并检查完整音频的原始 CRC、顺序和结束边界，包括最前 128 字节。FLAC 还会解析全部子帧结构并核对原始样本总数；只有精确音频边界后的最多 15 个封装余字节可以移除。运行时不声称校验解码后 PCM 的 MD5；真实 FLAC 样本另以独立解码验证原始 MD5。不会重建文件头、猜测采样率或修改校验和来接受结果。密钥只存在于处理文件的临时 Worker 内；完成或取消后 Worker 终止。技术过程、来源与复现方法见 [单文件恢复说明](docs/file-only-recovery.md)。
 
 推荐最新版 Chrome / Edge。WebKit 26.5 的 WAV / MP3 输入已通过转码验收，但本次新版 MGG 样本解密后的 OGG，以及 FLAC，在转码阶段失败，即使能力预检通过；此时显示该文件的错误，可换用 Chrome / Edge 重试。转码失败不会提供其他格式作为结果。Playwright WebKit 检查不等同于真实 Safari 或 iOS 实机验收。
 
@@ -45,7 +45,7 @@ python tests/browser_acceptance.py http://127.0.0.1:4173
 
 覆盖真实 QTag 解密 / MP3 下载、全部音频帧固定 320 kbps、旧版保存的偏好不影响输出、WebKit FLAC 不兼容时的明确错误、错误后下一文件、去重、帮助键盘焦点、四种视口和无音频 POST。完成后只保留文件行内状态和下载按钮。使用系统 Chrome 可设置 `CHROMIUM_CHANNEL=chrome`。结果默认写入忽略的 `web/test-results/`。
 
-新版 MGG 的完整浏览器验收需要另提供一个兼容的音乐文件（不写入仓库）：
+新版 MGG / MFLAC 的完整浏览器验收需要另提供一个兼容的音乐文件（不写入仓库）：
 
 ```bash
 python tests/file_only_browser.py http://127.0.0.1:4173 /path/to/input.mgg /path/to/results
