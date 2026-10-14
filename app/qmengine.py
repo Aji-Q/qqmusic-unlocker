@@ -34,8 +34,7 @@ IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 if IS_WIN:
     import wincred  # 同目录；Windows 版凭据读取（只读本人账号文件）
-    _APPDATA = os.environ.get("APPDATA", os.path.join(HOME, "AppData", "Roaming"))
-    SUPPORT_DIR = os.path.join(_APPDATA, "Tencent", "QQMusic")
+    SUPPORT_DIR = wincred.qqmusic_dir()
     PLIST = wincred.ini_path()          # 仅用于 engine_status 显示路径
     SQLITE = ""                         # Windows 客户端曲库结构不同，标签退回文件名解析
     CACHE_DIR = SUPPORT_DIR
@@ -53,6 +52,22 @@ else:
 API_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg"
 SUPPORTED_EXT = (".mgg", ".mgg1", ".mggl", ".mflac", ".mflac0", ".mflac1",
                  ".qmcogg", ".qmcflac", ".qmc0", ".qmc2", ".qmc3")
+
+
+def default_output_dir() -> str:
+    """尊重 Windows 桌面重定向（例如 OneDrive），不假定 ~/Desktop。"""
+    if IS_WIN:
+        import ctypes
+        folder = ctypes.create_unicode_buffer(32768)
+        # CSIDL_DESKTOPDIRECTORY，Windows Shell 自动处理用户目录重定向。
+        try:
+            if ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, folder) == 0:
+                if folder.value:
+                    return folder.value
+        except (AttributeError, OSError):
+            pass
+    desktop = os.path.join(HOME, "Desktop")
+    return desktop if os.path.isdir(desktop) else HOME
 
 
 def _ffbin(name: str) -> str:
@@ -308,7 +323,7 @@ def read_credentials() -> Credentials:
     if IS_WIN:
         try:
             uin, authst, login_type = wincred.read_credentials()
-        except (FileNotFoundError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             raise EngineError(str(exc)) from exc
         return Credentials(uin, authst, login_type, _plist_mtime())
     if not os.path.exists(PLIST):
@@ -452,12 +467,22 @@ def find_cover(song_id) -> str | None:
 
 # ------------------------------------------------------------------- 转码
 
+def _run_media(args):
+    """GUI 子系统启动控制台工具时隐藏窗口，并独立于标准流处理 UTF-8 输出。"""
+    try:
+        return subprocess.run(
+            args, stdin=subprocess.DEVNULL, capture_output=True,
+            text=True, encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WIN else 0)
+    except OSError as exc:
+        raise EngineError(f"无法运行 {os.path.basename(args[0])}：{exc}") from exc
+
+
 def ffprobe(path: str) -> dict:
-    out = subprocess.run(
+    out = _run_media(
         [FFPROBE, "-v", "error", "-select_streams", "a:0",
          "-show_entries", "stream=codec_name,sample_rate,channels",
-         "-show_entries", "format=duration,bit_rate", "-of", "json", path],
-        capture_output=True, text=True)
+         "-show_entries", "format=duration,bit_rate", "-of", "json", path])
     if out.returncode:
         raise EngineError("ffprobe 无法解析解密结果：" + out.stderr.strip()[:200])
     d = json.loads(out.stdout)
@@ -485,7 +510,7 @@ def to_mp3(ogg: str, mp3: str, tags: dict, bitrate: str, cover: str | None = Non
         args += ["-metadata", f"track={tags['track']}"]
     args += ["-metadata", "comment=decrypted from QQMusic encrypted audio",
              "-id3v2_version", "3", "-write_id3v1", "1", mp3]
-    proc = subprocess.run(args, capture_output=True, text=True)
+    proc = _run_media(args)
     if proc.returncode:
         raise EngineError("ffmpeg 转码失败：" + proc.stderr.strip()[:300])
 
@@ -524,14 +549,15 @@ def decrypt_file(path: str, outdir: str, bitrate: str = "320k",
 
     step("解密音频流", 0.25)
     make_cipher(parse_ekey(ekey)).decrypt(0, body)
-    if bytes(body[:4]) != b"OggS":
-        raise EngineError(f"解密失败：输出头不是 OggS（得到 {bytes(body[:4])!r}），"
-                          "通常是 ekey 不匹配")
+    headers = {b"OggS": ".ogg", b"fLaC": ".flac"}
+    audio_ext = headers.get(bytes(body[:4]))
+    if audio_ext is None:
+        raise EngineError(f"解密结果不是支持的 OGG / FLAC 音频（头部 {bytes(body[:4])!r}）")
 
     os.makedirs(outdir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(path))[0]
     tmpdir = tempfile.mkdtemp(prefix="qmdec-")
-    ogg = os.path.join(tmpdir, stem + ".ogg")
+    ogg = os.path.join(tmpdir, stem + audio_ext)
     try:
         step("写入中间文件", 0.4)
         with open(ogg, "wb") as f:
@@ -547,7 +573,7 @@ def decrypt_file(path: str, outdir: str, bitrate: str = "320k",
         mp3 = os.path.join(outdir, stem + ".mp3")
         to_mp3(ogg, mp3, tags, bitrate, cover)
         if keep_ogg:
-            shutil.move(ogg, os.path.join(outdir, stem + ".ogg"))
+            shutil.move(ogg, os.path.join(outdir, stem + audio_ext))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -618,8 +644,9 @@ def engine_status() -> dict:
     except EngineError as exc:
         st["error"] = str(exc)
         st["help"] = credential_help()
-    if not ff:
-        st["error"] = "缺少 ffmpeg" + ("" if IS_WIN else "，请先执行：brew install ffmpeg")
+    missing = [name for name, ready in (("ffmpeg", ff), ("ffprobe", ffp)) if not ready]
+    if missing:
+        st["error"] = "缺少 " + " / ".join(missing) + ("" if IS_WIN else "，请先执行：brew install ffmpeg")
     return st
 
 
@@ -627,7 +654,7 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="命令行模式（调试用）")
     ap.add_argument("targets", nargs="+")
-    ap.add_argument("-o", "--outdir", default=os.path.join(HOME, "Desktop"))
+    ap.add_argument("-o", "--outdir", default=default_output_dir())
     ap.add_argument("-b", "--bitrate", default="320k")
     ap.add_argument("--keep-ogg", action="store_true")
     a = ap.parse_args()

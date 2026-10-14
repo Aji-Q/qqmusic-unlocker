@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import qmengine as eng  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-UI_DIR = os.path.join(HERE, "ui")
+UI_DIR = (os.path.join(sys._MEIPASS, "app", "ui")
+          if getattr(sys, "frozen", False) else os.path.join(HERE, "ui"))
 HOME = os.path.expanduser("~")
 
 
@@ -57,7 +58,7 @@ class Jobs:
         self.running = False
         self.cancel = threading.Event()
         self.worker = None
-        self.outdir = os.path.join(HOME, "Desktop")
+        self.outdir = eng.default_output_dir()
         self.bitrate = "320k"
         self.keep_ogg = False
 
@@ -65,6 +66,7 @@ class Jobs:
     def snapshot(self):
         with self.lock:
             return {"version": self.version, "running": self.running,
+                    "stopping": self.running and self.cancel.is_set(),
                     "outdir": self.outdir, "bitrate": self.bitrate,
                     "keep_ogg": self.keep_ogg, "logs": self.logs[-200:],
                     "items": [i.as_dict() for i in self.items],
@@ -87,17 +89,23 @@ class Jobs:
     # ---------- 队列操作 ----------
     def add(self, paths):
         added, skipped = 0, 0
-        with self.lock:
-            known = {i.path for i in self.items}
-        for p in paths:
-            p = os.path.abspath(p)
-            if not os.path.exists(p) or p in known:
+        for supplied in paths:
+            path = os.path.abspath(supplied)
+            candidates = eng.scan_folder(path) if os.path.isdir(path) else [path]
+            if not candidates:
                 skipped += 1
-                continue
-            with self.lock:
-                self.items.append(Item(p))
-                known.add(p)
-            added += 1
+            for candidate in candidates:
+                if not os.path.isfile(candidate) or not candidate.lower().endswith(eng.SUPPORTED_EXT):
+                    skipped += 1
+                    continue
+                with self.lock:
+                    # Windows 路径忽略大小写；在锁内检查，避免两个拖入请求重复入队。
+                    known = {os.path.normcase(i.path) for i in self.items}
+                    if os.path.normcase(candidate) in known:
+                        skipped += 1
+                        continue
+                    self.items.append(Item(candidate))
+                    added += 1
         with self.lock:
             self.touch()
         if added:
@@ -108,10 +116,10 @@ class Jobs:
 
     def clear(self, only_finished=True):
         with self.lock:
-            if any(i.status == "进行中" for i in self.items):
+            if self.running or any(i.status == "进行中" for i in self.items):
                 return False
-            self.items = [i for i in self.items if not only_finished
-                          or i.status == "等待"]
+            self.items = ([i for i in self.items if i.status == "等待"]
+                          if only_finished else [])
             self.logs.clear()
             self.touch()
         return True
@@ -258,7 +266,7 @@ def pick_files():
     if IS_WIN:
         exts = " ".join(f"*{e}" for e in eng.SUPPORTED_EXT)
         res = _tk_dialog(lambda fd, r: fd.askopenfilenames(
-            title="选择加密音频文件",
+            title="选择加密音频文件", parent=r,
             filetypes=[("QQ 音乐加密音频", exts), ("所有文件", "*.*")]))
         return [p for p in res if p]
     type_list = ", ".join(f'"{e.lstrip(".")}"' for e in eng.SUPPORTED_EXT)
@@ -275,7 +283,7 @@ def pick_files():
 
 def pick_folder(prompt="选择包含加密音频的目录"):
     if IS_WIN:
-        return _tk_dialog(lambda fd, r: fd.askdirectory(title=prompt)) or ""
+        return _tk_dialog(lambda fd, r: fd.askdirectory(title=prompt, parent=r)) or ""
     out = osascript(f'POSIX path of (choose folder with prompt "{prompt}")')
     return out.strip()
 
@@ -326,7 +334,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.jobs.snapshot())
         if path == "/api/status":
             return self._json({"engine": eng.engine_status(),
-                               "defaults": {"outdir": os.path.join(HOME, "Desktop"),
+                               "defaults": {"outdir": eng.default_output_dir(),
                                             "home": HOME,
                                             "cache_dir": eng.CACHE_DIR}})
         if path == "/api/credentials/reload":
@@ -387,7 +395,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/open":
             # 「拖到图标/窗口上」的统一入口：加进队列，默认直接开跑（少点一次按钮）
             paths = [p for p in (payload.get("paths") or [])
-                     if os.path.isfile(p)]
+                     if os.path.exists(p)]
             added = self.jobs.add(paths)
             started = False
             if added and payload.get("auto_start", True):
@@ -443,8 +451,9 @@ def main():
     args = ap.parse_args()
 
     httpd, url = start_server(args.port, args.token, args.runtime_file)
-    sys.stdout.reconfigure(line_buffering=True)
-    print(f"QQ 音乐解锁器运行中：{url}", flush=True)
+    if sys.stdout is not None:
+        sys.stdout.reconfigure(line_buffering=True)
+        print(f"QQ 音乐解锁器运行中：{url}", flush=True)
     if not args.no_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:

@@ -22,7 +22,8 @@ _AUTHST = re.compile(rb'"authst"\s*:\s*"([A-Za-z0-9+/=_-]{16,4096})"')
 
 
 def qqmusic_dir() -> str:
-    return os.path.join(os.environ.get("APPDATA", ""), "Tencent", "QQMusic")
+    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Roaming")
+    return os.path.join(base, "Tencent", "QQMusic")
 
 
 def ini_path() -> str:
@@ -57,7 +58,7 @@ def parse_uin(text: str) -> str | None:
         key, sep, val = line.partition("=")
         if sep and key.strip().lower() == "uin":
             v = val.strip()
-            if v and v != "0":
+            if v.isascii() and v.isdigit() and int(v) > 0:
                 return v
     return None
 
@@ -81,7 +82,8 @@ def read_uin() -> str:
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"未找到 QQ 音乐配置：{path}（请先安装并登录 QQ 音乐客户端）")
-    uin = parse_uin(_decode(open(path, "rb").read()))
+    with open(path, "rb") as handle:
+        uin = parse_uin(_decode(handle.read()))
     if not uin:
         raise ValueError("配置文件里没有 Uin，请先在 QQ 音乐客户端登录")
     return uin
@@ -93,7 +95,8 @@ def read_authst() -> str:
         tried.append(path)
         if not os.path.exists(path):
             continue
-        tok = authst_from_blob(open(path, "rb").read())
+        with open(path, "rb") as handle:
+            tok = authst_from_blob(handle.read())
         if tok:
             return tok
     raise ValueError(

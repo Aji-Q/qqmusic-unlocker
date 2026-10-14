@@ -238,6 +238,10 @@ static NSArray<NSString *> *ExpandPaths(NSArray<NSString *> *paths)
                                                     backing:NSBackingStoreBuffered
                                                       defer:NO];
         self.window.title = @"QQ音乐解锁器";
+        self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+        self.window.backgroundColor = [NSColor colorWithCalibratedRed:245.0/255.0
+                                                               green:242.0/255.0
+                                                                blue:235.0/255.0 alpha:1.0];
         self.window.minSize = NSMakeSize(720, 520);
         self.window.delegate = self;
         self.window.releasedWhenClosed = NO;
