@@ -65,6 +65,8 @@ npm run build
 # 需要启用了 libvorbis 的 ffmpeg；输出目录必须位于仓库外。
 python tests/generate_file_only_fixtures.py --help
 python tests/generate_file_only_flac_fixtures.py --output /tmp/flac-fixtures
+# 在只允许读取 inputs/ 的独立进程内运行，结束后再与 private/ 中的 hash 比较。
+node tests/recover_flac_fixture.mjs /tmp/flac-fixtures/inputs/noise-0.mflac /tmp/recovered.flac
 
 # 浏览器验收只把 INPUT.mgg 交给网页；SHA256 仅在下载后比较。
 python tests/file_only_browser.py http://127.0.0.1:4173 INPUT.mgg OUTPUT_DIR EXPECTED_MP3_SHA256
