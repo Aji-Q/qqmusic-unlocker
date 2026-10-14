@@ -1,0 +1,4 @@
+web/tests/fixtures/*.mflac binary
+web/tests/fixtures/*.mgg binary
+web/tests/fixtures/*.flac binary
+web/tests/fixtures/*.wav binary
