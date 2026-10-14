@@ -8,6 +8,9 @@ on:
     tags: ["v*"]
 permissions:
   contents: read
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -34,7 +37,15 @@ jobs:
           brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
           ffmpeg -hide_banner -encoders 2>&1 | grep libmp3lame
       - name: Offline regression tests
-        run: python -m unittest discover -s tests -v
+        timeout-minutes: 3
+        run: |
+          python -u - <<'PY'
+          import faulthandler, unittest
+          faulthandler.dump_traceback_later(60, exit=True)
+          result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.discover('tests'))
+          faulthandler.cancel_dump_traceback_later()
+          raise SystemExit(not result.wasSuccessful())
+          PY
       - name: Build self-contained application
         run: PYTHON=python ./build.sh
       - name: Verify relocated application without Homebrew or Python in PATH
