@@ -44,7 +44,7 @@ with sync_playwright() as pw:
   musicex=b'x'*128+(32).to_bytes(4,'little')+b'\x00'*4+b'musicex\x00'
   page.locator('#files').set_input_files([{'name':'新版 示例.mflac','mimeType':'application/octet-stream','buffer':musicex},{'name':'空文件.mgg','mimeType':'application/octet-stream','buffer':b''}])
   page.locator('#start').click();expect(page.locator('#summary')).to_have_text('失败 2')
-  expect(page.locator('.fileError').first).to_contain_text('桌面版');expect(page.locator('.fileError a')).to_have_attribute('href','https://github.com/Aji-Q/qqmusic-unlocker/releases/latest')
+  expect(page.locator('.fileError').first).to_contain_text('文件未内嵌解密密钥');expect(page.locator('.fileError a')).to_have_count(0)
   expect(page.locator('#retry')).to_be_visible();page.locator('#clear').click()
   page.locator('#files').set_input_files(str(F/'silence.wav'));page.locator('#format').select_option('mp3');page.locator('#start').click();page.locator('.download').wait_for(timeout=60000)
   assert not errors,(name,errors)

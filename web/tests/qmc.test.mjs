@@ -124,7 +124,7 @@ test('musicex fails before reading the audio body or requesting credentials', as
       return original.slice(start, end);
     },
   };
-  await rejectsCode(decryptFile(instrumented), 'needs_desktop');
+  await rejectsCode(decryptFile(instrumented), 'external_key_required');
   assert.deepEqual(reads, [[0, 32], [1008, 1024]]);
 });
 

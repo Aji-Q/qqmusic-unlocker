@@ -15,13 +15,13 @@
     <nav aria-label="辅助导航"><button id="helpOpen" class="quiet">使用帮助</button><a class="button small" href="https://github.com/Aji-Q/qqmusic-unlocker/releases/latest" target="_blank" rel="noopener noreferrer">下载桌面版 <span aria-hidden="true">↗</span></a></nav>
   </header>
   <main>
-    <div class="intro"><div><p class="eyebrow">LOCAL AUDIO CONVERTER</p><h1>音乐文件转换</h1></div><p class="local"><span aria-hidden="true">●</span> 本地处理 · 音频不上传</p></div>
+    <div class="intro"><div><p class="eyebrow">LOCAL AUDIO CONVERTER</p><h1>音乐文件转换</h1></div><p class="local"><span aria-hidden="true">●</span> 无需登录 · 音频不上传</p></div>
     <ol class="steps" aria-label="操作步骤"><li><span>01</span> 选择文件</li><li><span>02</span> 开始转换</li><li><span>03</span> 下载结果</li></ol>
     <div class="workspace">
       <section class="drop" id="dropzone" aria-labelledby="dropTitle">
         <div class="uploadIcon" aria-hidden="true">＋</div>
         <h2 id="dropTitle">拖入音乐文件</h2>
-        <p class="formats">MGG · MFLAC · QMC · FLAC · OGG · WAV · MP3</p>
+        <p class="formats">FLAC · OGG · WAV · MP3 · 部分 MGG / MFLAC / QMC</p>
         <button id="choose" class="primary">选择文件 <span aria-hidden="true">↗</span></button>
         <input id="files" type="file" multiple accept=".mgg,.mgg1,.mggl,.mflac,.mflac0,.mflac1,.qmcogg,.qmcflac,.qmc0,.qmc2,.qmc3,.flac,.ogg,.wav,.mp3" hidden />
         <p class="limit">单个文件不超过 100 MB · 最多 20 个</p>
@@ -34,7 +34,7 @@
         <div class="destination"><span aria-hidden="true">↓</span><p>完成后点击下载<span>保存到浏览器的下载位置</span></p></div>
       </section>
     </div>
-    <p class="compatibility">网页支持带内嵌密钥的旧版文件。新版文件需使用 <a href="https://github.com/Aji-Q/qqmusic-unlocker/releases/latest" target="_blank" rel="noopener noreferrer">桌面版</a>。</p>
+    <p class="compatibility">支持普通音频与内嵌密钥的 QQ 音乐文件；缺少密钥的新版文件暂不支持。</p>
     <div id="notice" class="notice" role="status" hidden></div>
     <section class="queueSection" aria-labelledby="queueTitle">
       <div class="sectionHead"><h2 id="queueTitle">文件队列 <span id="count">0</span></h2><div class="actions"><button class="quiet small" id="retry" hidden>重试失败项</button><button class="quiet small" id="clear" disabled>清空列表</button></div></div>
@@ -44,6 +44,6 @@
     </section>
   </main>
   <footer><span>WEB 1.0 · 非 QQ 音乐官方产品</span><div><a href="https://github.com/Aji-Q/qqmusic-unlocker" target="_blank" rel="noopener noreferrer">GitHub ↗</a><a href="/licenses.html" target="_blank" rel="noopener noreferrer">开源组件</a></div></footer>
-  <dialog id="help" aria-labelledby="helpTitle"><div class="dialogHead"><h2 id="helpTitle">开始使用</h2><button id="helpClose" class="quiet" aria-label="关闭帮助">关闭</button></div><ol class="helpSteps"><li><strong>找到已下载的歌曲</strong><p>打开电脑 QQ 音乐的设置，查看下载目录。需要本地音频文件，歌单链接不能转换。</p></li><li><strong>选择文件，开始转换</strong><p>MP3 便于播放；「原格式」保留解密后的音频，不再次压缩。码率不会提升原有音质。</p></li><li><strong>点击文件旁的「下载」</strong><p>文件保存到浏览器的下载位置。请在关闭或刷新页面前下载结果。</p></li></ol><details><summary>为什么某些 QQ 音乐文件不能转换？</summary><p>同一扩展名可能使用不同加密方式。网页只支持内嵌密钥的 QTag / V1 文件，无法读取电脑 QQ 音乐的登录信息。提示「需要桌面版」时，请下载桌面版，在本机登录 QQ 音乐后处理。</p></details><details><summary>处理失败或文件较大</summary><p>MP3 转换推荐最新版 Chrome / Edge。Safari 可解密并保存原格式，部分音频转 MP3 可能失败。每个文件上限 100 MB，每批总量上限 200 MB。转换较慢或内存不足时，请减少文件数量，或使用桌面版。只有完整的 FLAC、OGG、WAV、MP3 和兼容的 QMC2 文件能处理。</p></details><p class="privacy">文件只在当前浏览器内处理；没有音频上传或账号登录。仅处理本人有权使用的文件。</p><a class="button primary" href="https://github.com/Aji-Q/qqmusic-unlocker/releases/latest" target="_blank" rel="noopener noreferrer">下载桌面版 ↗</a></dialog>
+  <dialog id="help" aria-labelledby="helpTitle"><div class="dialogHead"><h2 id="helpTitle">开始使用</h2><button id="helpClose" class="quiet" aria-label="关闭帮助">关闭</button></div><ol class="helpSteps"><li><strong>找到已下载的歌曲</strong><p>打开电脑 QQ 音乐的设置，查看下载目录。需要本地音频文件，歌单链接不能转换。</p></li><li><strong>选择文件，开始转换</strong><p>MP3 便于播放；「原格式」保留解密后的音频，不再次压缩。码率不会提升原有音质。</p></li><li><strong>点击文件旁的「下载」</strong><p>文件保存到浏览器的下载位置。请在关闭或刷新页面前下载结果。</p></li></ol><details><summary>为什么某些 QQ 音乐文件不能转换？</summary><p>网页无需登录。同一扩展名可能使用不同加密方式：QTag / V1 文件自带密钥，可直接转换；musicex 文件不带密钥，仅凭音乐文件无法完成转换，当前网页暂不支持。</p></details><details><summary>处理失败或文件较大</summary><p>MP3 转换推荐最新版 Chrome / Edge。Safari 可解密并保存原格式，部分音频转 MP3 可能失败。每个文件上限 100 MB，每批总量上限 200 MB。转换较慢或内存不足时，请减少文件数量，或使用桌面版。只有完整的 FLAC、OGG、WAV、MP3 和兼容的 QMC2 文件能处理。</p></details><p class="privacy">文件只在当前浏览器内处理；没有音频上传或账号登录。仅处理本人有权使用的文件。</p><a class="button primary" href="https://github.com/Aji-Q/qqmusic-unlocker/releases/latest" target="_blank" rel="noopener noreferrer">下载桌面版 ↗</a></dialog>
 </body>
 </html>

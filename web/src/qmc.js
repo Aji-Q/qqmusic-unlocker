@@ -236,7 +236,7 @@ async function embeddedKey(file) {
     if (footerLength < 16 || footerLength >= size) {
       fail('invalid_footer', '文件的尾部信息不完整', '请重新下载文件。');
     }
-    fail('needs_desktop', '此文件需要桌面版', '网页无法读取 QQ 音乐登录，请在桌面版中转换。');
+    fail('external_key_required', '此格式暂不支持', '文件未内嵌解密密钥，无法仅凭此文件转换。');
   }
   const tagged = tail.length >= 8 && startsWith(tail.subarray(tail.length - 4), 'QTag');
   const suffixLength = tagged ? 8 : 4;

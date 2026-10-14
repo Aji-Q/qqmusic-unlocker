@@ -2,7 +2,6 @@ import './style.css';
 import { abortable } from './abortable.js';
 
 const $ = id => document.getElementById(id);
-const release = 'https://github.com/Aji-Q/qqmusic-unlocker/releases/latest';
 const MAX_FILE = 100 * 1024 * 1024, MAX_TOTAL = 200 * 1024 * 1024, MAX_COUNT = 20;
 let items = [], busy = false, controller = null, nextId = 0;
 const size = n => `${(n / 1024 / 1024).toFixed(n < 1024 * 1024 ? 2 : 1)} MB`;
@@ -29,10 +28,6 @@ function notice(message, error = false) {
 }
 function textElement(tag, className, text) {
   const el = document.createElement(tag); el.className = className; el.textContent = text; return el;
-}
-function releaseLink() {
-  const el = textElement('a', '', '下载桌面版 ↗');
-  el.href = release; el.target = '_blank'; el.rel = 'noopener noreferrer'; return el;
 }
 function render() {
   const focused = document.activeElement?.dataset?.focus;
@@ -62,7 +57,7 @@ function render() {
     }
     if (item.error) {
       const error = textElement('p', 'fileError', item.error);
-      if (item.code === 'needs_desktop') error.append(releaseLink()); content.append(error);
+      content.append(error);
     }
     const actions = textElement('div', 'actions', '');
     if (item.url) {
