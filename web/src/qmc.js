@@ -1,4 +1,4 @@
-/** Local QMC2 decryption. No network or account credentials are used here. */
+/** Local QMC2 decryption, including verified file-only recovery for compatible MGG. */
 
 const DELTA = 0x9e3779b9;
 const MAX_KEY_BYTES = 16 * 1024;
@@ -236,7 +236,7 @@ async function embeddedKey(file) {
     if (footerLength < 16 || footerLength >= size) {
       fail('invalid_footer', '文件的尾部信息不完整', '请重新下载文件。');
     }
-    fail('external_key_required', '此格式暂不支持', '文件未内嵌解密密钥，无法仅凭此文件转换。');
+    return { bodyEnd: size - footerLength, recoverFromFile: true };
   }
   const tagged = tail.length >= 8 && startsWith(tail.subarray(tail.length - 4), 'QTag');
   const suffixLength = tagged ? 8 : 4;
@@ -290,7 +290,22 @@ export async function decryptFile(file, onProgress = () => {}) {
     }
     throw error;
   }
+  if (footer.recoverFromFile && footer.bodyEnd < 1537 * 5120) {
+    fail('file_only_unsupported', '暂时无法仅凭此文件转换', '文件较短，不满足当前恢复条件。');
+  }
+  if (footer.recoverFromFile && footer.bodyEnd > 100 * 1024 * 1024) {
+    fail('file_too_large', '文件超过 100 MB 上限');
+  }
   const data = await readBytes(file, 0, footer.bodyEnd);
+  let verify;
+  if (footer.recoverFromFile) {
+    const [{ recoverOggStream }, { recoverFileKey, verifyRecoveredOgg }] = await Promise.all([
+      import('./file-only-stream.js'), import('./file-only-key.js'),
+    ]);
+    const observations = await recoverOggStream(data, value => onProgress(value * 0.7));
+    footer.key = recoverFileKey(observations, value => onProgress(0.7 + value * 0.15));
+    verify = verifyRecoveredOgg;
+  }
   const cipher = makeCipher(footer.key);
   for (let offset = 0; offset < data.length; offset += CHUNK_SIZE) {
     const end = Math.min(offset + CHUNK_SIZE, data.length);
@@ -298,8 +313,10 @@ export async function decryptFile(file, onProgress = () => {}) {
     if (offset === 0 && !['.flac', '.ogg'].includes(audioExtension(data.subarray(0, 32)))) {
       fail('decryption_failed', '无法解密此文件', '文件可能不完整或使用其他加密方式，请尝试桌面版。');
     }
-    onProgress(end / data.length);
+    onProgress(footer.recoverFromFile ? 0.85 + end / data.length * 0.14 : end / data.length);
     if (end < data.length) await new Promise((resolve) => setTimeout(resolve, 0));
   }
+  if (verify) verify(data);
+  onProgress(1);
   return { data, extension: audioExtension(data.subarray(0, 32)), name, decrypted: true };
 }

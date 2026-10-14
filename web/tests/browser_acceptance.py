@@ -40,11 +40,11 @@ with sync_playwright() as pw:
   with page.expect_download() as dl:page.locator('.download').click()
   path=WORK/f'web-{name}-original.flac';dl.value.save_as(str(path));assert path.read_bytes()==(F/'silence.flac').read_bytes()
   page.locator('#clear').click()
-  # Supported-signature failures and modern no-key guidance cannot wedge queue.
+  # Unsupported short MusicEx inputs cannot wedge the queue or request credentials.
   musicex=b'x'*128+(32).to_bytes(4,'little')+b'\x00'*4+b'musicex\x00'
   page.locator('#files').set_input_files([{'name':'新版 示例.mflac','mimeType':'application/octet-stream','buffer':musicex},{'name':'空文件.mgg','mimeType':'application/octet-stream','buffer':b''}])
   page.locator('#start').click();expect(page.locator('#summary')).to_have_text('失败 2')
-  expect(page.locator('.fileError').first).to_contain_text('文件未内嵌解密密钥');expect(page.locator('.fileError a')).to_have_count(0)
+  expect(page.locator('.fileError').first).to_contain_text('不满足当前恢复条件');expect(page.locator('.fileError a')).to_have_count(0)
   expect(page.locator('#retry')).to_be_visible();page.locator('#clear').click()
   page.locator('#files').set_input_files(str(F/'silence.wav'));page.locator('#format').select_option('mp3');page.locator('#start').click();page.locator('.download').wait_for(timeout=60000)
   assert not errors,(name,errors)

@@ -100,7 +100,9 @@ $('dropzone').addEventListener('dragenter', e => { e.preventDefault(); dragDepth
 $('dropzone').addEventListener('dragleave', () => { if (--dragDepth <= 0) $('dropzone').classList.remove('hot'); });
 $('dropzone').addEventListener('drop', e => { dragDepth = 0; $('dropzone').classList.remove('hot'); addFiles([...e.dataTransfer.files]); });
 
-function decrypt(file, signal, progress) {
+async function decrypt(file, signal, progress) {
+  // WebKit can lose a path-backed File's read grant when cloned into a Worker.
+  const bytes = await abortable(file.arrayBuffer(), signal, { timeoutMs: 30000 });
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./decrypt-worker.js', import.meta.url), { type: 'module' });
     const cleanup = () => { worker.terminate(); signal.removeEventListener('abort', abort); clearTimeout(timer); };
@@ -113,7 +115,7 @@ function decrypt(file, signal, progress) {
       if (data.error) reject(Object.assign(new Error(data.error.message), data.error)); else resolve(data.result);
     };
     worker.onerror = () => { cleanup(); reject(new Error('文件处理组件无法启动，请刷新页面后重试。')); };
-    if (signal.aborted) abort(); else worker.postMessage(file);
+    if (signal.aborted) abort(); else worker.postMessage({ bytes, name: file.name }, [bytes]);
   });
 }
 function saveResult(item, bytes, extension, name) {

@@ -6,7 +6,7 @@
 
 无需安装：[打开网页版](https://qqmusic-unlocker-web.vercel.app)。选择文件 → 开始转换 → 下载结果，音频不上传。推荐 Chrome / Edge。
 
-网页支持带内嵌密钥的旧版 QMC2，以及普通 FLAC / OGG / WAV / MP3 转码。不携带密钥的新版 musicex 文件，当前网页无法仅凭音乐文件转换。浏览器无法转 MP3 时，仍可下载已解密的原格式。开发与兼容性见 [web/README.md](web/README.md)。
+网页支持旧版 QMC2、普通 FLAC / OGG / WAV / MP3，以及部分新版 MusicEx MGG 的单文件恢复。只需选择音乐文件，无需账号、客户端缓存或额外密钥文件；新版恢复结果必须通过全部原始 Ogg 页面校验。浏览器无法转 MP3 时，仍可下载已解密的原格式。适用范围与限制见 [web/README.md](web/README.md)。
 
 ## 下载与安装
 

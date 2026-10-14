@@ -110,7 +110,7 @@ test('valid encrypted FLAC audio decrypts to the original FLAC file', async () =
   }
 });
 
-test('musicex fails before reading the audio body or requesting credentials', async () => {
+test('musicex too short for file-only recovery fails before allocating the body', async () => {
   const data = new Uint8Array(1024);
   new DataView(data.buffer).setUint32(data.length - 16, 168, true);
   data.set(new TextEncoder().encode('musicex\0'), data.length - 8);
@@ -124,7 +124,7 @@ test('musicex fails before reading the audio body or requesting credentials', as
       return original.slice(start, end);
     },
   };
-  await rejectsCode(decryptFile(instrumented), 'external_key_required');
+  await rejectsCode(decryptFile(instrumented), 'file_only_unsupported');
   assert.deepEqual(reads, [[0, 32], [1008, 1024]]);
 });
 
