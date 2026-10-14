@@ -15,7 +15,7 @@ with sync_playwright() as pw:
   page.on('request',lambda r:writes.append(r.url) if r.method not in ['GET','HEAD'] else None)
   print('BROWSER',name,flush=True)
   response=page.goto(URL);assert response.status==200
-   expect(page.locator('#start')).to_be_disabled()
+  expect(page.locator('#start')).to_be_disabled()
   page.locator('#helpOpen').click(); expect(page.locator('#help')).to_be_visible();page.keyboard.press('Escape');expect(page.locator('#help')).to_be_hidden()
   assert page.locator('#helpOpen').evaluate('(e)=>e===document.activeElement')
   for w,h in [(1440,900),(1280,720),(768,1024),(390,844)]:
